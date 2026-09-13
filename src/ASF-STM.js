@@ -26,6 +26,7 @@
     let bots = null;
     let myBadges = [];
     let botBadges = [];
+    let tradableCardCounts = null;
     let maxPages;
     let stop = false;
     let botCacheTime = 5 * 60000;
@@ -738,10 +739,14 @@
                                 errors = 0;
                                 myBadges[index].maxCards = xhr.response.badgedata.rgCards.length;
                                 for (let i = 0; i < myBadges[index].maxCards; i++) {
+                                    let ownedCount = xhr.response.badgedata.rgCards[i].owned;
+                                    if (tradableCardCounts !== null && myBadges[index].appId in tradableCardCounts) {
+                                        ownedCount = tradableCardCounts[myBadges[index].appId][xhr.response.badgedata.rgCards[i].markethash] || 0;
+                                    }
                                     let newcard = {
                                         item: xhr.response.badgedata.rgCards[i].title,
                                         hash: xhr.response.badgedata.rgCards[i].markethash,
-                                        count: xhr.response.badgedata.rgCards[i].owned,
+                                        count: ownedCount,
                                         iconUrl: xhr.response.badgedata.rgCards[i].imgurl,
                                         number: i,
                                     };
@@ -1322,12 +1327,76 @@
         return inventory;
     }
 
-    async function getBadgesInventory() {
+    function isTradableDescription(description) {
+        // `tradable` is the current trade state. `market_tradable_restriction` is only the
+        // post-market cooldown period (e.g. 7) and is present even on tradable items, so it
+        // must not be used to decide tradability here.
+        return description.tradable !== false && description.tradable !== 0 && description.tradable !== "0";
+    }
+
+    function buildTradableCardCounts(inventoryData) {
+        const counts = {};
+        const descriptionByClassInstance = new Map();
+        const heldClassInstances = new Set();
+        let excluded = 0;
+
+        for (const description of inventoryData.descriptions) {
+            const isCard = description.tags?.some(
+                tag => tag.category === "item_class" && tag.internal_name === "item_class_2"
+            );
+            const isRegular = description.tags?.some(tag => tag.internal_name === "cardborder_0");
+
+            if (!isCard || !isRegular) {
+                continue;
+            }
+
+            const appId = description.market_fee_app;
+            if (appId === undefined) {
+                continue;
+            }
+
+            if (!(appId in counts)) {
+                counts[appId] = {};
+            }
+
+            const classInstance = `${description.classid}_${description.instanceid}`;
+
+            if (!isTradableDescription(description)) {
+                heldClassInstances.add(classInstance);
+                continue;
+            }
+
+            descriptionByClassInstance.set(classInstance, description);
+        }
+
+        for (const asset of inventoryData.assets) {
+            const classInstance = `${asset.classid}_${asset.instanceid}`;
+            const description = descriptionByClassInstance.get(classInstance);
+
+            if (!description) {
+                if (heldClassInstances.has(classInstance)) {
+                    excluded++;
+                }
+                continue;
+            }
+
+            const hash = description.market_hash_name;
+            if (!hash) {
+                continue;
+            }
+
+            counts[description.market_fee_app][hash] = (counts[description.market_fee_app][hash] || 0) + 1;
+        }
+
+        debugPrint(`Tradability: ${Object.keys(counts).length} card app(s), ${excluded} trade-held card(s) excluded`);  // DEBUG
+
+        return counts;
+    }
+
+    async function getBadgesInventory(inventoryData) {
         if (processFilters()) {
             return;
         }
-        const re = /g_steamID = "(.*)";/g;
-        const g_steamID = re.exec(document.documentElement.textContent)[1];
 
         const fetchJSON = url => new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
@@ -1349,32 +1418,24 @@
             });
         });
         const badgeCardData = await fetchJSON('https://raw.githubusercontent.com/nolddor/steam-badges-db/main/data/badges.min.json');
-        const inventoryData = await fetchInventory();
 
-        const descriptions = inventoryData.descriptions.filter(desc =>
-            desc.tags.some(tag =>tag.internal_name === "cardborder_0")
-        )
-
-        /* Get inventory assets as assetId (unique per item) and classId (generic per item) */
-        const assets = inventoryData.assets.map(({ assetid, classid }) => ({ assetid, classid }));
-
-        /* Get inventory descriptions map as classId and appId */
-        const classidMap = new Map(descriptions.filter(x => x.market_fee_app in badgeCardData).map(({ classid, market_fee_app }) => [ classid, market_fee_app ]));
+        if (tradableCardCounts === null) {
+            tradableCardCounts = buildTradableCardCounts(inventoryData);
+        }
 
         const scanResult = {};
 
-        /* Map assets to appId */
-        for (const {classid} of assets) {
-            const appId = classidMap.get(classid);
-
-            if (!appId) continue;
-
-            if (!scanResult[appId]) {
-                scanResult[appId] = {data:{}, max_size: 0, unbalanced: undefined};
+        /* Map tradable card counts to appId */
+        for (const appId of Object.keys(tradableCardCounts)) {
+            if (!(appId in badgeCardData)) {
+                continue;
             }
 
-            scanResult[appId].data[classid] = (scanResult[appId].data[classid] || 0) + 1;
-            scanResult[appId].max_size = badgeCardData[appId].size;
+            scanResult[appId] = {
+                data: tradableCardCounts[appId],
+                max_size: badgeCardData[appId].size,
+                unbalanced: undefined,
+            };
         }
 
         /* Check for unbalanced appIds */
@@ -1546,6 +1607,26 @@
         console.log(`Stopping: ${reason}`);
     }
 
+    async function prepareInventoryScan() {
+        let inventoryData = null;
+        try {
+            inventoryData = await fetchInventory();
+            tradableCardCounts = buildTradableCardCounts(inventoryData);
+        } catch (error) {
+            tradableCardCounts = null;
+            debugPrint("Tradability lookup failed, using owned card counts: " + error);  // DEBUG
+        }
+
+        if (globalSettings.inventoryScan && inventoryData !== null) {
+            getBadgesInventory(inventoryData);
+        } else {
+            if (globalSettings.inventoryScan) {
+                debugPrint("Inventory scan unavailable, falling back to badge page scan");  // DEBUG
+            }
+            getBadges(1);
+        }
+    }
+
     function buttonPressedEvent() {
         if (globalSettings.preventClose) {
             window.addEventListener('beforeunload', function (e) {
@@ -1578,16 +1659,12 @@
         stop = false;
         myBadges.length = 0;
         cardNames = new Set();
+        tradableCardCounts = null;
         tradeParams = {
             matches: {},
             filter: [],
         };
-        if (globalSettings.inventoryScan) {
-            getBadgesInventory();
-        }
-        else {
-            getBadges(1);
-        }
+        prepareInventoryScan();
     }
 
     function resetRadials() {
