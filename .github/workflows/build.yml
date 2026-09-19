@@ -20,8 +20,19 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.14'
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run unit tests
+        run: node --test test/*.test.js
       - name: Build
         run: python script/build.py
+      - name: Verify dist artifacts
+        run: |
+          test -f dist/ASF-STM.user.js
+          test -f dist/ASF-STM.debug.js
+          ! grep -RF '{{' dist/ || (echo 'Unreplaced placeholder in dist/' && exit 1)
       - name: Get previous commit hash
         run: echo "PREVIOUS_COMMIT_HASH=$(git rev-parse HEAD^)" >> $GITHUB_ENV
       - name: Set env

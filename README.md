@@ -24,6 +24,19 @@ Go to [the latest release](https://github.com/iBreakEverything/ASF-STM-Enhanceme
 ## Description
 It does what the original [ASF-STM (by Rudokhvist)](https://github.com/Rudokhvist/ASF-STM) script does with some extra features.
 
+## Development
+Run the unit tests (Node.js only, no dependencies):
+
+```
+node --test test/*.test.js
+```
+
+Build both distributables (`dist/ASF-STM.user.js` and `dist/ASF-STM.debug.js`):
+
+```
+python script/build.py
+```
+
 ## Added features
 - Invenotry scan: scan your inventory in only 10\* seconds!
 - Friend match: match with your public-inventory friends (friends-only/private inventories will mark the badges as private).

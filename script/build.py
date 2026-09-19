@@ -1,12 +1,16 @@
 import os
 import re
+import sys
 
-REPO_ROOT = os.path.abspath('./')
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST_DIR = os.path.join(REPO_ROOT, 'dist')
 SRC_DIR = os.path.join(REPO_ROOT, 'src')
 TEMPLATES_DIR = os.path.join(SRC_DIR, 'templates')
+LIB_DIR = os.path.join(SRC_DIR, 'lib')
 
 USERSCRIPT_FILE = os.path.join(SRC_DIR, 'ASF-STM.js')
+TRADABLE_LIB_FILE = os.path.join(LIB_DIR, 'tradable.js')
+TRADABLE_LIB_PLACEHOLDER = '{{TRADABLE_LIB}}'
 RELEASE_FILE = os.path.join(DIST_DIR, 'ASF-STM.user.js')
 DEBUG_FILE = os.path.join(DIST_DIR, 'ASF-STM.debug.js')
 
@@ -62,28 +66,60 @@ def minify_css(css):
             rules.append('%s{%s}' % (','.join(selectors), ''.join(['%s:%s;' % (key, properties[key]) for key in porder])[:-1]))
     return ''.join(rules)
 
+def fail(message):
+    print(f'build failed: {message}', file=sys.stderr)
+    sys.exit(1)
+
+def read_file(path):
+    try:
+        with open(path, 'r', encoding='utf8') as f:
+            return f.read()
+    except FileNotFoundError:
+        fail(f'missing required file: {os.path.relpath(path, REPO_ROOT)}')
+    except OSError as error:
+        fail(f'cannot read {os.path.relpath(path, REPO_ROOT)}: {error}')
+
 def main():
     os.makedirs(DIST_DIR, exist_ok=True)
 
-    with open(USERSCRIPT_FILE, 'r', encoding='utf8') as f:
-        script = f.read()
+    if not os.path.isdir(TEMPLATES_DIR):
+        fail(f'missing templates directory: {os.path.relpath(TEMPLATES_DIR, REPO_ROOT)}')
 
-    for file in os.listdir(TEMPLATES_DIR):
+    script = read_file(USERSCRIPT_FILE)
+
+    template_files = sorted(os.listdir(TEMPLATES_DIR))
+    if not template_files:
+        fail(f'no template files found in {os.path.relpath(TEMPLATES_DIR, REPO_ROOT)}')
+
+    for file in template_files:
         # Init placeholder: variableName -> {{VARIABLE_NAME}}
         placeholder = '{{%s}}' % screaming_snake_to_camel(os.path.splitext(file)[0])
 
+        if placeholder not in script:
+            fail(f'placeholder {placeholder} from template {file} not found in {os.path.relpath(USERSCRIPT_FILE, REPO_ROOT)}')
+
         # Get and minify content where possible
-        with open(os.path.join(TEMPLATES_DIR, file), 'r', encoding='utf8') as f:
-            content = f.read()
+        content = read_file(os.path.join(TEMPLATES_DIR, file))
         if file.endswith('.js'):
             content = minify_js_html_template(content)
         elif file.endswith('.css'):
             content = minify_css(content)
         elif file == 'version':
             content = content.strip()
-        
+
         # Replace placeholder with content
         script = script.replace(placeholder, content)
+
+    # Inline the shared tradability helpers (tested via node, shipped inline so
+    # dist stays single-file). Inserted raw: never minified, DEBUG markers kept
+    # so the release/debug split below applies to them as well.
+    if TRADABLE_LIB_PLACEHOLDER not in script:
+        fail(f'placeholder {TRADABLE_LIB_PLACEHOLDER} from {os.path.relpath(TRADABLE_LIB_FILE, REPO_ROOT)} not found in {os.path.relpath(USERSCRIPT_FILE, REPO_ROOT)}')
+    script = script.replace(TRADABLE_LIB_PLACEHOLDER, read_file(TRADABLE_LIB_FILE))
+
+    leftovers = sorted(set(re.findall(r'{{[A-Za-z0-9_.]+}}', script)))
+    if leftovers:
+        fail(f'unreplaced placeholders in {os.path.relpath(USERSCRIPT_FILE, REPO_ROOT)}: {", ".join(leftovers)}')
 
     with open(DEBUG_FILE, 'w', encoding='utf8', newline='\n') as f:
         f.write(script.replace('  // DEBUG', ''))
@@ -92,4 +128,11 @@ def main():
         release_script = '\n'.join([x for x in script.split('\n') if not x.endswith('// DEBUG')])
         f.write(release_script)
 
-main()
+    for path in (DEBUG_FILE, RELEASE_FILE):
+        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+            fail(f'expected output was not written: {os.path.relpath(path, REPO_ROOT)}')
+
+    print(f'built {os.path.relpath(DEBUG_FILE, REPO_ROOT)} and {os.path.relpath(RELEASE_FILE, REPO_ROOT)}')
+
+if __name__ == '__main__':
+    main()
