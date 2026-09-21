@@ -39,8 +39,8 @@ jobs:
       - name: Verify dist artifacts
         run: |
           test -f dist/ASF-STM.user.js
-          test -f dist/ASF-STM.debug.js
           ! grep -RF '{{' dist/ || (echo 'Unreplaced placeholder in dist/' && exit 1)
+          ! grep -RF '// DEBUG' dist/ || (echo 'Debug marker left in dist/' && exit 1)
       - name: Get previous commit hash
         run: echo "PREVIOUS_COMMIT_HASH=$(git rev-parse HEAD^)" >> $GITHUB_ENV
       - name: Set env
@@ -80,6 +80,5 @@ jobs:
           draft: true
           files: |
             dist/ASF-STM.user.js
-            dist/ASF-STM.debug.js
           name: ASF-STM-Enhancement V${{ env.VERSION }}
           tag_name: ${{ env.VERSION }}

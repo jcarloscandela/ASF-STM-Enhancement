@@ -1,4 +1,39 @@
-/* HTML */`
+// Config-dialog HTML. Converted verbatim from the former
+// `src/templates/configDialogTemplate.js` placeholder: expressions that used
+// to evaluate in the userscript scope are now explicit parameters.
+
+export interface ConfigDialogSettings {
+  matchFriends: boolean;
+  anyBots: boolean;
+  fairBots: boolean;
+  botMinItems: number;
+  botMaxItems: number;
+  sortByName: boolean;
+  preventClose: boolean;
+  debug: boolean;
+  weblimiter: number;
+  errorLimiter: number;
+  maxErrors: number;
+  inventoryScan: boolean;
+  inventoryScanDelay: number;
+  tradeMessage: string;
+  doAfterTrade: string;
+  order: string;
+  autoSend: boolean;
+  useScanFilters: boolean;
+  autoAddScanFilters: boolean;
+  autoDeleteScanFilters: boolean;
+}
+
+export function renderConfigDialog(
+  settings: ConfigDialogSettings,
+  filterBG: [string, number] | string,
+  questionmarkURL: string,
+  sortSelectsHtml: string,
+  blacklistText: string,
+  scanFiltersTemplate: string,
+): string {
+  return /* HTML */ `
 <div class="asf-stm-config">
 <ul class="asf_stm_tabs" style="margin: 0;padding: 0;">
     <li class="asf_stm_tab">
@@ -9,7 +44,7 @@
                 <legend>MATCH FRIENDS</legend>
                 <div class="asf-stm-margin-bottom">
                     <span class="asf-stm-margin-right">Match with friends (only public inventories)</span>
-                    <input type="checkbox" id="matchFriends" ${globalSettings.matchFriends ? 'checked' : ''} class="asf-stm-checkbox">
+                    <input type="checkbox" id="matchFriends" ${settings.matchFriends ? "checked" : ""} class="asf-stm-checkbox">
                 </div>
             </fieldset>
 
@@ -17,23 +52,23 @@
                 <legend>BOTS TO MATCH</legend>
                 <div class="asf-stm-margin-bottom">
                     <span class="asf-stm-margin-right">Match with "Any" bots</span>
-                    <input type="checkbox" id="anyBots" ${globalSettings.anyBots ? 'checked' : ''} class="asf-stm-checkbox">
+                    <input type="checkbox" id="anyBots" ${settings.anyBots ? "checked" : ""} class="asf-stm-checkbox">
                     <br>
                     <span class="asf-stm-margin-right">Match with "Fair" bots</span>
-                    <input type="checkbox" id="fairBots" ${globalSettings.fairBots ? 'checked' : ''} class="asf-stm-checkbox">
+                    <input type="checkbox" id="fairBots" ${settings.fairBots ? "checked" : ""} class="asf-stm-checkbox">
                 </div>
                 <div class="asf-stm-margin-bottom">
                     <span class="asf-stm-margin-right">Minimum items:</span>
-                    <input type="number" id="botMinItems" value=${globalSettings.botMinItems} min="0" class="asf-stm-input">
+                    <input type="number" id="botMinItems" value=${settings.botMinItems} min="0" class="asf-stm-input">
                     <br>
                     <span class="asf-stm-margin-right">Maximum items:</span>
-                    <input type="number" id="botMaxItems" value=${globalSettings.botMaxItems} min="0" class="asf-stm-input">
+                    <input type="number" id="botMaxItems" value=${settings.botMaxItems} min="0" class="asf-stm-input">
                     <a class="tooltip hover_tooltip" data-tooltip-text="Don't match with bots that has less or more than required limit of items in steam inventory. 0 means no limit on number of items">
                         <img src="${questionmarkURL}">
                     </a>
                 </div>
                 <div class="asf-stm-margin-bottom">
-                    ${Array.from({ length: 4 }, (_, i) => createSortSelect(i)).join('')}
+                    ${sortSelectsHtml}
                 </div>
             </fieldset>
 
@@ -48,11 +83,11 @@
                 </div>
                 <div class="asf-stm-margin-bottom">
                     <span class="asf-stm-margin-right">Sort results by game name</span>
-                    <input type="checkbox" id="sortByName" class="asf-stm-checkbox" ${globalSettings.sortByName ? 'checked' : ''}>
+                    <input type="checkbox" id="sortByName" class="asf-stm-checkbox" ${settings.sortByName ? "checked" : ""}>
                 </div>
                 <div class="asf-stm-margin-bottom">
                     <span class="asf-stm-margin-right">Prevent navigation or page leave</span>
-                    <input type="checkbox" id="preventClose" class="asf-stm-checkbox" ${globalSettings.preventClose ? 'checked' : ''}>
+                    <input type="checkbox" id="preventClose" class="asf-stm-checkbox" ${settings.preventClose ? "checked" : ""}>
                     <a class="tooltip hover_tooltip" data-tooltip-text="A dialog box will prevent navigation and exitting the page to avoid losing progess.">
                         <img src="${questionmarkURL}">
                     </a>
@@ -65,7 +100,7 @@
                     <legend>DEVELOPER</legend>
                     <div>
                         <span class="asf-stm-margin-right">Debug</span>
-                        <input type="checkbox" id="debug" ${globalSettings.debug ? 'checked' : ''} class="asf-stm-checkbox">
+                        <input type="checkbox" id="debug" ${settings.debug ? "checked" : ""} class="asf-stm-checkbox">
                         <a class="tooltip hover_tooltip" data-tooltip-text="Enable additional output to console">
                             <img src="${questionmarkURL}">
                         </a>
@@ -74,23 +109,23 @@
 
                 <div>
                     <span class="asf-stm-span">Web limiter delay (ms):</span>
-                    <input type="number" id="weblimiter" value= ${globalSettings.weblimiter} min=0 class="asf-stm-input">
+                    <input type="number" id="weblimiter" value= ${settings.weblimiter} min=0 class="asf-stm-input">
                 </div>
                 <div style="grid-column-start: 1;grid-row-start: 2;">
                     <span class="asf-stm-span">Delay on error (ms):</span>
-                    <input type="number" id="errorLimiter" value=${globalSettings.errorLimiter} min=0 class="asf-stm-input">
+                    <input type="number" id="errorLimiter" value=${settings.errorLimiter} min=0 class="asf-stm-input">
                 </div>
                 <div style="grid-column-start: 1;grid-row-start: 3;">
                     <span class="asf-stm-span">Max errors:</span>
-                    <input type="number" id="maxErrors" value=${globalSettings.maxErrors} min=0 class="asf-stm-input">
+                    <input type="number" id="maxErrors" value=${settings.maxErrors} min=0 class="asf-stm-input">
                 </div>
                 <div class="grid-column-start: 1;grid-row-start: 4;">
                     <span class="asf-stm-span">Scan inventory</span>
-                    <input type="checkbox" id="inventoryScan" ${globalSettings.inventoryScan ? 'checked' : ''} class="asf-stm-checkbox">
+                    <input type="checkbox" id="inventoryScan" ${settings.inventoryScan ? "checked" : ""} class="asf-stm-checkbox">
                 </div>
                 <div style="grid-column-start: 1;grid-row-start: 5;">
                     <span class="asf-stm-span">Inventory scan delay (ms):</span>
-                    <input type="number" id="inventoryScanDelay" value=${globalSettings.inventoryScanDelay} min=1 class="asf-stm-input">
+                    <input type="number" id="inventoryScanDelay" value=${settings.inventoryScanDelay} min=1 class="asf-stm-input">
                 </div>
             </fieldset>
         </div>
@@ -103,7 +138,7 @@
             <fieldset>
                 <legend>TRADE OFFER MESSAGE</legend>
                 <textarea id="tradeMessage" name="tradeMessage" rows="4" cols="60" class="asf-stm-textarea">
-                    ${globalSettings.tradeMessage}
+                    ${settings.tradeMessage}
                 </textarea>
                 <a class="tooltip hover_tooltip" data-tooltip-text="Custom text that will be included automatically with your trade offers created through STM while using this userscript. To remove this functionality, simply delete the text.">
                     <img src="${questionmarkURL}">
@@ -114,9 +149,9 @@
                 <legend>ACTION AFTER TRADE</legend>
                 <label for="after-trade" class="asf-stm-margin-right">After trade...</label>
                 <select id="doAfterTrade" name="after-trade" class="asf-stm-select asf-stm-margin-bottom">
-                    <option value="NOTHING" ${globalSettings.doAfterTrade === "NOTHING" ? 'selected' : ''}>Do Nothing</option>
-                    <option value="CLOSE_WINDOW" ${globalSettings.doAfterTrade === "CLOSE_WINDOW" ? 'selected' : ''}>Close window</option>
-                    <option value="CLICK_OK" ${globalSettings.doAfterTrade === "CLICK_OK" ? 'selected' : ''}>Click OK</option>
+                    <option value="NOTHING" ${settings.doAfterTrade === "NOTHING" ? "selected" : ""}>Do Nothing</option>
+                    <option value="CLOSE_WINDOW" ${settings.doAfterTrade === "CLOSE_WINDOW" ? "selected" : ""}>Close window</option>
+                    <option value="CLICK_OK" ${settings.doAfterTrade === "CLICK_OK" ? "selected" : ""}>Click OK</option>
                 </select>
                 <a class="tooltip hover_tooltip" data-tooltip-html="<p>Determines what happens when you complete a trade offer.</p><ul><li><strong>Do nothing</strong>: Will do nothing more than the normal behavior.</li><li><strong>Close window</strong>: Will close the window after the trade offer is sent.</li><li><strong>Click OK</strong>: Will redirect you to the trade offers recap page.</li></ul>">
                     <img src="${questionmarkURL}">
@@ -127,9 +162,9 @@
                 <legend>CARDS OFFER</legend>
                 <label for="cards-order" class="asf-stm-margin-right">Cards order</label>
                 <select id="order" name="cards-order" class="form-control asf-stm-select asf-stm-margin-bottom">
-                    <option value="SORT" ${globalSettings.order === "SORT" ? 'selected' : ''}>Sorted</option>
-                    <option value="RANDOM" ${globalSettings.order === "RANDOM" ? 'selected' : ''}>Random</option>
-                    <option value="AS_IS" ${globalSettings.order === "AS_IS" ? 'selected' : ''}>As is</option>
+                    <option value="SORT" ${settings.order === "SORT" ? "selected" : ""}>Sorted</option>
+                    <option value="RANDOM" ${settings.order === "RANDOM" ? "selected" : ""}>Random</option>
+                    <option value="AS_IS" ${settings.order === "AS_IS" ? "selected" : ""}>As is</option>
                 </select>
                 <a class="tooltip hover_tooltip" data-tooltip-html="<p>Determines which card is added to trade.</p><ul><li><strong>Sorted</strong>: Will sort cards by their IDs before adding to trade. If you make several trade offers with the same card and one of them is accepted, the rest will have message &quot;cards unavilable to trade&quot;.</li><li><strong>Random</strong>: Will add cards to trade randomly. If you make several trade offers and one of them is accepted, only some of them will be unavilable for trade.</li><li><strong>As is</strong>: Script doesn't change anything in order. Results vary depending on browser, steam servers, weather...</li></ul>">
                     <img src="${questionmarkURL}">
@@ -140,7 +175,7 @@
                 <legend>AUTO-SEND TRADE OFFER</legend>
                 <div class="asf-stm-margin-bottom">
                     <label for="auto-send" class="asf-stm-margin-right">Enable</label>
-                    <input type="checkbox" id="autoSend" name="auto-send" value="1" ${globalSettings.autoSend ? 'checked' : ''} class="asf-stm-checkbox asf-stm-margin-bottom">
+                    <input type="checkbox" id="autoSend" name="auto-send" value="1" ${settings.autoSend ? "checked" : ""} class="asf-stm-checkbox asf-stm-margin-bottom">
                     <a class="tooltip hover_tooltip" data-tooltip-text="Makes it possible for the script to automatically send trade offers without any action on your side. This is not recommended as you should always check your trade offers, but, well, this is a possible thing. Please note that incomplete trade offers (missing cards, ...) won't be sent automatically even when this parameter is set to true.">
                         <img src="${questionmarkURL}">
                     </a>
@@ -156,7 +191,7 @@
             <div class="title_text profile_xp_block_remaining">
                 <h1 style="margin: 0.5em;">Comma-separated list of ignored steamIDs</h1>
                 <textarea class="asf-stm-textarea" id="blacklist" name="Blacklist" rows="17" cols="63">
-                    ${arrayToText(blacklist)}
+                    ${blacklistText}
                 </textarea>
             </div>
         </div>
@@ -170,19 +205,19 @@
                 <legend>SETTINGS</legend>
                 <div class="asf-stm-margin-bottom">
                     <span class="asf-stm-margin-right">Use scan filters</span>
-                    <input type="checkbox" id="useScanFilters" ${globalSettings.useScanFilters ? 'checked' : ''} class="asf-stm-checkbox">
+                    <input type="checkbox" id="useScanFilters" ${settings.useScanFilters ? "checked" : ""} class="asf-stm-checkbox">
                     <a class="tooltip hover_tooltip" data-tooltip-text="Filter badges to cut short the duration of the scan.">
                         <img src="${questionmarkURL}">
                     </a>
                     <br>
                     <span class="asf-stm-margin-right">Auto add new scan filters</span>
-                    <input type="checkbox" id="autoAddScanFilters" ${globalSettings.autoAddScanFilters ? 'checked' : ''} class="asf-stm-checkbox">
+                    <input type="checkbox" id="autoAddScanFilters" ${settings.autoAddScanFilters ? "checked" : ""} class="asf-stm-checkbox">
                     <a class="tooltip hover_tooltip" data-tooltip-text="Add new scan filters from a fresh scan (clear all your filters).">
                         <img src="${questionmarkURL}">
                     </a>
                     <br>
                     <span class="asf-stm-margin-right">Auto delete old scan filters</span>
-                    <input type="checkbox" id="autoDeleteScanFilters" ${globalSettings.autoDeleteScanFilters ? 'checked' : ''} class="asf-stm-checkbox">
+                    <input type="checkbox" id="autoDeleteScanFilters" ${settings.autoDeleteScanFilters ? "checked" : ""} class="asf-stm-checkbox">
                     <a class="tooltip hover_tooltip" data-tooltip-text="Delete scan filters from badges without duplicates.">
                         <img src="${questionmarkURL}">
                     </a>
@@ -213,4 +248,5 @@
     </li>
 </ul>
 </div>
-`
+`;
+}

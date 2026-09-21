@@ -1,4 +1,15 @@
-/* HTML */`
+// Scan-progress main-content HTML. Converted verbatim from the former
+// `src/templates/mainContentDiv.innerHTML.js` placeholder: values that used
+// to evaluate in the userscript scope are now explicit parameters.
+
+export interface MainContentData {
+  firstRadialName: string;
+  matchFriends: boolean;
+  filterBackgroundColor: string;
+}
+
+export function renderMainContent(data: MainContentData): string {
+  return /* HTML */ `
 <div class="profile_badges_header">
     <div id="throbber">
         <div class="LoadingWrapper">
@@ -16,7 +27,7 @@
                 <div id="scan-pages-radial" class="radial-progress" style="--progress: 0deg;">
                     <div id="scan-pages-text" class="progress-inner">?</div>
                 </div>
-                <span id="scan-pages-label" class="label">${getFirstRadialName()}</span>
+                <span id="scan-pages-label" class="label">${data.firstRadialName}</span>
             </div>
             <div class="progress-step">
                 <div id="scan-badges-radial" class="radial-progress" style="--progress: 0deg;">
@@ -28,19 +39,19 @@
                 <div id="scan-bots-radial" class="radial-progress" style="--progress: 0deg;">
                     <div id="scan-bots-text" class="progress-inner">?</div>
                 </div>
-                <span id="scan-bots-label" class="label">${globalSettings.matchFriends ? 'Friends' : 'Bots'}</span>
+                <span id="scan-bots-label" class="label">${data.matchFriends ? "Friends" : "Bots"}</span>
             </div>
             <div class="progress-step">
                 <div id="bots-badges-radial" class="radial-progress" style="--progress: 0deg;">
                     <div id="bots-badges-text" class="progress-inner">?</div>
                 </div>
-                <span id="bots-badges-label" class="label">${globalSettings.matchFriends ? 'Friend Badges' : 'Bot Badges'}</span>
+                <span id="bots-badges-label" class="label">${data.matchFriends ? "Friend Badges" : "Bot Badges"}</span>
             </div>
         </div>
     </div>
 </div>
 
-<div id="asf_stm_filters" style="position: fixed; z-index: 1000; right: 5px; bottom: 45px; transition-duration: 500ms; transition-timing-function: ease; margin-right: -50%; padding: 5px; max-width: 40%; display: inline-block; border-radius: 2px; background:${globalSettings.filterBackgroundColor}; color: #67c1f5;">
+<div id="asf_stm_filters" style="position: fixed; z-index: 1000; right: 5px; bottom: 45px; transition-duration: 500ms; transition-timing-function: ease; margin-right: -50%; padding: 5px; max-width: 40%; display: inline-block; border-radius: 2px; background:${data.filterBackgroundColor}; color: #67c1f5;">
     <div style="white-space: nowrap;">Select:
         <a id="asf_stm_filter_all" class="commentthread_pagelinks">all</a>
         <a id="asf_stm_filter_none" class="commentthread_pagelinks">none</a>
@@ -57,4 +68,5 @@
         <span>Filters</span>
     </a>
 </div>
-`
+`;
+}
