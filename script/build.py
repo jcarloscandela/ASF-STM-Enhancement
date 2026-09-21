@@ -11,6 +11,8 @@ LIB_DIR = os.path.join(SRC_DIR, 'lib')
 USERSCRIPT_FILE = os.path.join(SRC_DIR, 'ASF-STM.js')
 TRADABLE_LIB_FILE = os.path.join(LIB_DIR, 'tradable.js')
 TRADABLE_LIB_PLACEHOLDER = '{{TRADABLE_LIB}}'
+SETTINGS_LIB_FILE = os.path.join(LIB_DIR, 'settings.js')
+SETTINGS_LIB_PLACEHOLDER = '{{SETTINGS_LIB}}'
 RELEASE_FILE = os.path.join(DIST_DIR, 'ASF-STM.user.js')
 DEBUG_FILE = os.path.join(DIST_DIR, 'ASF-STM.debug.js')
 
@@ -116,6 +118,12 @@ def main():
     if TRADABLE_LIB_PLACEHOLDER not in script:
         fail(f'placeholder {TRADABLE_LIB_PLACEHOLDER} from {os.path.relpath(TRADABLE_LIB_FILE, REPO_ROOT)} not found in {os.path.relpath(USERSCRIPT_FILE, REPO_ROOT)}')
     script = script.replace(TRADABLE_LIB_PLACEHOLDER, read_file(TRADABLE_LIB_FILE))
+
+    # Inline the shared settings helpers (tested via node, shipped inline so
+    # dist stays single-file). Same raw-insert treatment as the tradable lib.
+    if SETTINGS_LIB_PLACEHOLDER not in script:
+        fail(f'placeholder {SETTINGS_LIB_PLACEHOLDER} from {os.path.relpath(SETTINGS_LIB_FILE, REPO_ROOT)} not found in {os.path.relpath(USERSCRIPT_FILE, REPO_ROOT)}')
+    script = script.replace(SETTINGS_LIB_PLACEHOLDER, read_file(SETTINGS_LIB_FILE))
 
     leftovers = sorted(set(re.findall(r'{{[A-Za-z0-9_.]+}}', script)))
     if leftovers:

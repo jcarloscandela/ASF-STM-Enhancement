@@ -268,20 +268,20 @@
     }
 
     function LoadConfig() {
-        globalSettings = JSON.parse(localStorage.getItem("TempAsfStm.ASF.STM.Settings"));
-        blacklist = JSON.parse(localStorage.getItem("TempAsfStm.ASF.STM.Blacklist"));
-        if (globalSettings === null) {
-            ResetConfig();
+        let storedSettings = null;
+        try {
+            storedSettings = JSON.parse(localStorage.getItem("TempAsfStm.ASF.STM.Settings"));
+        } catch (error) {
+            storedSettings = null;
         }
+        // Merge stored values over the defaults so a saved option (e.g.
+        // inventoryScan=true) survives across sessions and missing keys from
+        // older stored configs receive real defaults instead of undefined.
+        globalSettings = mergeWithDefaults(storedSettings, defaultSettings);
+        blacklist = JSON.parse(localStorage.getItem("TempAsfStm.ASF.STM.Blacklist"));
         if (blacklist === null) {
             blacklist = [];
         }
-        //vaildate config
-        Object.keys(defaultSettings).forEach(function (key) {
-            if (!globalSettings.hasOwnProperty(key)) {
-                globalSettings[key] = defaultSettings[defaultSettings];
-            }
-        });
     }
 
     function SaveParams() {
@@ -1103,9 +1103,13 @@
         });
     }
 
-    function processFilters() {
+    function processFilters(scanPlan) {
+        // The scan plan is snapshotted when Scan is clicked so the executed path
+        // always matches the saved setting, even when the bot list is refetched
+        // first. Scan filters take precedence over the inventory scan by design.
+        const plan = scanPlan || resolveScanPlan(globalSettings);
         const activeScanFilters = globalSettings.scanFilters.filter(x => x.active);
-        if (globalSettings.useScanFilters && activeScanFilters.length) {
+        if (plan.mode === "filters" && activeScanFilters.length) {
             for (let filter of activeScanFilters) {
                 let badgeStub = {
                     appId: filter.appId,
@@ -1131,8 +1135,8 @@
         return false;
     }
 
-    function getBadges(page) {
-        if (processFilters()) {
+    function getBadges(page, scanPlan) {
+        if (processFilters(scanPlan)) {
             return;
         }
         let url = "https://steamcommunity.com/" + myProfileLink + "/badges?p=" + page;
@@ -1194,11 +1198,11 @@
             if ((status < 400 || status >= 500) && errors <= globalSettings.maxErrors) {
                 if (page <= maxPages) {
                     setTimeout(
-                        (function (page) {
+                        (function (page, scanPlan) {
                             return function () {
-                                getBadges(page);
+                                getBadges(page, scanPlan);
                             };
-                        })(page),
+                        })(page, scanPlan),
                         globalSettings.weblimiter + globalSettings.errorLimiter * errors,
                     );
                 } else {
@@ -1234,11 +1238,11 @@
             errors++;
             if (errors <= globalSettings.maxErrors) {
                 setTimeout(
-                    (function (page) {
+                    (function (page, scanPlan) {
                         return function () {
-                            getBadges(page);
+                            getBadges(page, scanPlan);
                         };
-                    })(page),
+                    })(page, scanPlan),
                     globalSettings.weblimiter + globalSettings.errorLimiter * errors,
                 );
             } else {
@@ -1337,8 +1341,12 @@
        are inlined here by script/build.py so dist stays single-file. */
     {{TRADABLE_LIB}}
 
-    async function getBadgesInventory(inventoryData, runId) {
-        if (processFilters()) {
+    /* Settings helpers (mergeWithDefaults, resolveScanPlan) live in
+       src/lib/settings.js and are inlined here by script/build.py. */
+    {{SETTINGS_LIB}}
+
+    async function getBadgesInventory(inventoryData, runId, scanPlan) {
+        if (processFilters(scanPlan)) {
             return;
         }
 
@@ -1377,7 +1385,8 @@
 
         if (tradableCardCounts === null) {
             // Tradability unknown and unrecoverable here: fall back to badge pages.
-            getBadges(1);
+            debugPrint("Tradability unknown, falling back to badge page scan");  // DEBUG
+            getBadges(1, scanPlan);
             return;
         }
 
@@ -1531,7 +1540,8 @@
         console.log(`Stopping: ${reason}`);
     }
 
-    async function prepareInventoryScan(runId) {
+    async function prepareInventoryScan(runId, scanPlan) {
+        const plan = scanPlan || resolveScanPlan(globalSettings);
         let inventoryData = null;
         try {
             inventoryData = await fetchInventory(runId);
@@ -1544,25 +1554,29 @@
             return; // superseded by a newer scan run; that run owns the UI now
         }
 
-        if (globalSettings.inventoryScan && inventoryData !== null) {
+        if (plan.inventoryScan && inventoryData !== null) {
             try {
-                await getBadgesInventory(inventoryData, runId);
+                await getBadgesInventory(inventoryData, runId, plan);
             } catch (error) {
                 debugPrint("Badge database fetch failed, falling back to badge page scan: " + error);  // DEBUG
                 if (runId !== undefined && (runId !== scanRunId || stop)) {
                     return;
                 }
-                getBadges(1);
+                getBadges(1, plan);
             }
         } else {
-            if (globalSettings.inventoryScan) {
+            if (plan.inventoryScan) {
                 debugPrint("Inventory scan unavailable, falling back to badge page scan");  // DEBUG
             }
-            getBadges(1);
+            getBadges(1, plan);
         }
     }
 
-    function buttonPressedEvent() {
+    function buttonPressedEvent(pendingPlan) {
+        // Snapshot the scan mode at click time and carry it through the cold
+        // bot-cache refetch below, so the first scan of the day runs in the
+        // saved mode (inventory vs. badge vs. filters) exactly like a retry.
+        const scanPlan = pendingPlan || resolveScanPlan(globalSettings);
         if (globalSettings.preventClose) {
             window.addEventListener('beforeunload', function (e) {
                 e.preventDefault();
@@ -1570,7 +1584,7 @@
         }
         if (bots === null || bots.Result === undefined || bots.Result.length === 0 || bots.Success !== true || bots.cacheTime + botCacheTime < Date.now() || globalSettings.matchFriends !== bots.friends) {
             debugPrint("Bot cache invalidated");  // DEBUG
-            fetchBots();
+            fetchBots(scanPlan);
             return;
         }
         if (!globalSettings.matchFriends) {
@@ -1578,6 +1592,7 @@
         }
         disableButton();
         debugPrint(new Date(Date.now()));  // DEBUG
+        debugPrint("scan plan: mode=" + scanPlan.mode + " inventoryScan=" + scanPlan.inventoryScan + " useScanFilters=" + scanPlan.useScanFilters);  // DEBUG
         let mainContentDiv = document.getElementsByClassName("maincontent")[0];
         mainContentDiv.textContent = "";
         mainContentDiv.style.width = "90%";
@@ -1601,7 +1616,7 @@
             matches: {},
             filter: [],
         };
-        prepareInventoryScan(runId);
+        prepareInventoryScan(runId, scanPlan);
     }
 
     function resetRadials() {
@@ -1680,7 +1695,7 @@
         return result;
     }
 
-    function fetchBots() {
+    function fetchBots(pendingPlan) {
         let requestUrl = "https://asf.justarchi.net/Api/Listing/Bots";
         if (globalSettings.matchFriends) {
             requestUrl = "https://steamcommunity.com/actions/PlayerList/?type=friends";
@@ -1745,7 +1760,7 @@
                         bots.Result = bots.Result.filter(bot => bot.MatchableTypes.find(x => x === 5))
                         debugPrint("found total " + bots.Result.length + " bots");  // DEBUG
                         localStorage.setItem("TempAsfStm.ASF.STM.BotCache", JSON.stringify(bots));
-                        buttonPressedEvent();
+                        buttonPressedEvent(pendingPlan);
                     } else {
                         //ASF backend does not indicate success
                         disableButton();
@@ -1912,6 +1927,13 @@
                     // add all matching cards to temporary dict
                     index = requestedCards.findIndex((elem) => elem == inv[item].market_hash_name);
                     if (index > -1) {
+                        // Skip copies Steam would omit from the trade: trade-held
+                        // cards and cards with a future "Tradable After" date.
+                        // When every copy is held, the request falls through to
+                        // the existing missing-items abort below.
+                        if (!isTradeOfferItemTradable(inv[item])) {
+                            return;
+                        }
                         if (tmpCards[requestedCards[index]] === undefined) {
                             tmpCards[requestedCards[index]] = [];
                         }

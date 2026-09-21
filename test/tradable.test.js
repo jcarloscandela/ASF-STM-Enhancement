@@ -13,6 +13,10 @@ const assert = require('node:assert/strict');
 
 const {
     isTradableDescription,
+    getTradableAfterTime,
+    hasFutureTradeHold,
+    isCurrentlyTradableDescription,
+    isTradeOfferItemTradable,
     buildTradableCardCounts,
     resolveOwnedCount,
     buildScanEligibility,
@@ -60,6 +64,130 @@ describe('isTradableDescription', () => {
     it('ignores market_tradable_restriction on tradable items', () => {
         const desc = cardDescription({ tradable: 1, market_tradable_restriction: 7 });
         assert.equal(isTradableDescription(desc), true);
+    });
+});
+
+describe('time-gated trade holds ("Tradable After")', () => {
+    // Fixed clock: 21 Sep 2026, noon local. All dates below are fixed relative
+    // to it so the tests stay deterministic regardless of the real run date.
+    const NOW = new Date(2026, 8, 21, 12, 0, 0).getTime();
+
+    function heldDescription(value, overrides = {}) {
+        return cardDescription({
+            tradable: 1,
+            descriptions: [{ value, color: '' }],
+            ...overrides,
+        });
+    }
+
+    it('treats a future DD/MM/YYYY hold as non-tradable (reported Alyx Vance case)', () => {
+        const desc = heldDescription('Tradable After: 26/09/2026, 09:00:00');
+        assert.equal(hasFutureTradeHold(desc, NOW), true);
+        assert.equal(isCurrentlyTradableDescription(desc, NOW), false);
+    });
+
+    it('treats a past hold as tradable again', () => {
+        const desc = heldDescription('Tradable After: 01/09/2026, 09:00:00');
+        assert.equal(hasFutureTradeHold(desc, NOW), false);
+        assert.equal(isCurrentlyTradableDescription(desc, NOW), true);
+    });
+
+    it('parses month-name and ISO dates', () => {
+        assert.equal(hasFutureTradeHold(heldDescription('Tradable After Sep 26, 2026'), NOW), true);
+        assert.equal(hasFutureTradeHold(heldDescription('Tradable After 26 Sep 2026'), NOW), true);
+        assert.equal(hasFutureTradeHold(heldDescription('Tradable After 2026-09-26'), NOW), true);
+        assert.equal(hasFutureTradeHold(heldDescription('Tradable After Jan 1, 2020'), NOW), false);
+    });
+
+    it('reads the hold from owner_descriptions too', () => {
+        const desc = cardDescription({
+            tradable: 1,
+            owner_descriptions: [{ value: 'Tradable After: 26/09/2026, 09:00:00', color: '' }],
+        });
+        assert.equal(isCurrentlyTradableDescription(desc, NOW), false);
+    });
+
+    it('falls back to the tradable flag when the hold date is missing or unparseable', () => {
+        const noDate = heldDescription('Tradable After soon');
+        assert.equal(getTradableAfterTime(noDate), null);
+        assert.equal(isCurrentlyTradableDescription(noDate, NOW), true);
+
+        const policyText = heldDescription('Items are tradable after purchase on the market');
+        assert.equal(isCurrentlyTradableDescription(policyText, NOW), true);
+
+        const noLines = cardDescription({ tradable: 1 });
+        assert.equal(isCurrentlyTradableDescription(noLines, NOW), true);
+    });
+
+    it('keeps the tradable flag authoritative for hard holds', () => {
+        const heldFlag = heldDescription('Tradable After: 01/09/2026, 09:00:00', { tradable: 0 });
+        assert.equal(isCurrentlyTradableDescription(heldFlag, NOW), false);
+
+        const heldFlagPast = cardDescription({ tradable: false });
+        assert.equal(isCurrentlyTradableDescription(heldFlagPast, NOW), false);
+    });
+
+    it('still ignores market_tradable_restriction when a dated hold is present', () => {
+        const desc = heldDescription('Tradable After: 26/09/2026, 09:00:00', {
+            market_tradable_restriction: 7,
+        });
+        assert.equal(isCurrentlyTradableDescription(desc, NOW), false);
+        const noHold = cardDescription({ tradable: 1, market_tradable_restriction: 7 });
+        assert.equal(isCurrentlyTradableDescription(noHold, NOW), true);
+    });
+
+    it('excludes future-dated copies from tradable counts', () => {
+        const future = cardDescription({
+            classid: '101', instanceid: '201', tradable: 1,
+            descriptions: [{ value: 'Tradable After: 26/09/2099, 09:00:00', color: '' }],
+        });
+        const past = cardDescription({
+            classid: '102', instanceid: '202', tradable: 1,
+            market_hash_name: 'Game-Card A',
+            descriptions: [{ value: 'Tradable After: 01/01/2020, 09:00:00', color: '' }],
+        });
+        const inventory = {
+            descriptions: [cardDescription(), future, past],
+            assets: [asset(), asset('101', '201'), asset('102', '202')],
+        };
+        assert.deepEqual(buildTradableCardCounts(inventory), { 753: { 'Game-Card A': 2 } });
+    });
+});
+
+describe('isTradeOfferItemTradable', () => {
+    const NOW = new Date(2026, 8, 21, 12, 0, 0).getTime();
+
+    function offerItem(overrides = {}) {
+        return {
+            market_hash_name: 'Game-Card A',
+            tradable: 1,
+            type: 'Trading Card',
+            ...overrides,
+        };
+    }
+
+    it('accepts plain tradable copies', () => {
+        assert.equal(isTradeOfferItemTradable(offerItem(), NOW), true);
+    });
+
+    it('rejects flag-held copies', () => {
+        assert.equal(isTradeOfferItemTradable(offerItem({ tradable: 0 }), NOW), false);
+    });
+
+    it('rejects future-dated holds', () => {
+        const item = offerItem({
+            descriptions: [{ value: 'Tradable After: 26/09/2026, 09:00:00', color: '' }],
+        });
+        assert.equal(isTradeOfferItemTradable(item, NOW), false);
+    });
+
+    it('accepts past-dated holds and unknown shapes (fail open)', () => {
+        const past = offerItem({
+            descriptions: [{ value: 'Tradable After: 01/01/2020, 09:00:00', color: '' }],
+        });
+        assert.equal(isTradeOfferItemTradable(past, NOW), true);
+        assert.equal(isTradeOfferItemTradable(null, NOW), true);
+        assert.equal(isTradeOfferItemTradable({}, NOW), true);
     });
 });
 
