@@ -83,3 +83,25 @@ export function resolveScanPlan(settings: unknown): ScanPlan {
     activeFilterAppIds: [],
   };
 }
+
+/** Prerequisites for completing an inventory-mode scan. */
+export interface InventoryHealth {
+  inventoryOk: boolean;
+  badgesDbOk: boolean;
+  tradabilityOk: boolean;
+}
+
+/** Where a scan run must go next: inventory discovery, badge pages, or abort. */
+export type ScanRoute = "inventory" | "badges" | "abort";
+
+// Decides the next path from the snapshotted plan plus inventory health.
+// Inventory mode proceeds only when every prerequisite holds; any failure
+// aborts instead of silently falling back to badge pages. Non-inventory
+// modes keep the badge-page path (filters mode is diverted earlier by
+// processFilters, badges mode is the explicit badge flow).
+export function resolveScanRoute(plan: ScanPlan, health: InventoryHealth): ScanRoute {
+  if (plan.mode !== "inventory") {
+    return "badges";
+  }
+  return health.inventoryOk && health.badgesDbOk && health.tradabilityOk ? "inventory" : "abort";
+}

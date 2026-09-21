@@ -8,7 +8,7 @@ import { renderConfigDialog } from "./templates/configDialogTemplate";
 import { renderMainContent } from "./templates/mainContentTemplate";
 import { renderMatch } from "./templates/matchTemplate";
 import { renderRow } from "./templates/rowTemplate";
-import { mergeWithDefaults, resolveScanPlan } from "./lib/settings";
+import { mergeWithDefaults, resolveScanPlan, resolveScanRoute } from "./lib/settings";
 import type { ScanPlan } from "./lib/settings";
 import {
   buildScanEligibility,
@@ -1649,8 +1649,15 @@ export interface ProgressRadials {
     }
 
     if (tradableCardCounts === null) {
-      // Tradability unknown and unrecoverable here: fall back to badge pages.
-      debugPrint("Tradability unknown, falling back to badge page scan");
+      // Tradability unknown and unrecoverable here: abort in inventory mode
+      // instead of silently falling back to the badge-page scan.
+      debugPrint("Tradability unknown and unrecoverable");
+      if (resolveScanRoute(scanPlan, { inventoryOk: true, badgesDbOk: true, tradabilityOk: false }) === "abort") {
+        abortInventoryScan(
+          "Tradable card data is unavailable, inventory scan aborted. Retry, or disable inventory scan to use badge pages.",
+        );
+        return;
+      }
       getBadges(1, scanPlan);
       return;
     }
@@ -1816,6 +1823,21 @@ export interface ProgressRadials {
     console.log(`Stopping: ${reason}`);
   }
 
+  // Aborts an inventory-mode scan with a visible error instead of silently
+  // falling back to the slow badge-page crawl.
+  function abortInventoryScan(message: string): void {
+    debugPrint(message);
+    const statusElement = document.getElementById("scan-pages-text") as HTMLElement | null;
+    if (statusElement) {
+      statusElement.textContent = "Error";
+      statusElement.title = message;
+    }
+    if (typeof unsafeWindow.ShowAlertDialog === "function") {
+      unsafeWindow.ShowAlertDialog("Inventory scan failed", message);
+    }
+    stopEventCleanup(message);
+  }
+
   async function prepareInventoryScan(runId: number, scanPlan: ScanPlan): Promise<void> {
     const plan = scanPlan || resolveScanPlan(globalSettings);
     let inventoryData: (InventoryData & { success?: unknown }) | null = null;
@@ -1834,16 +1856,32 @@ export interface ProgressRadials {
       try {
         await getBadgesInventory(inventoryData, runId, plan);
       } catch (error) {
-        debugPrint("Badge database fetch failed, falling back to badge page scan: " + error);
+        debugPrint("Badge database fetch failed: " + error);
         if (runId !== undefined && (runId !== scanRunId || stop)) {
+          return;
+        }
+        if (
+          resolveScanRoute(plan, {
+            inventoryOk: true,
+            badgesDbOk: false,
+            tradabilityOk: tradableCardCounts !== null,
+          }) === "abort"
+        ) {
+          abortInventoryScan(
+            "Steam badges database is unavailable, inventory scan aborted. Retry, or disable inventory scan to use badge pages.",
+          );
           return;
         }
         getBadges(1, plan);
       }
+    } else if (
+      resolveScanRoute(plan, { inventoryOk: inventoryData !== null, badgesDbOk: false, tradabilityOk: false }) ===
+      "abort"
+    ) {
+      abortInventoryScan(
+        "Steam inventory is unavailable, inventory scan aborted. Retry, or disable inventory scan to use badge pages.",
+      );
     } else {
-      if (plan.inventoryScan) {
-        debugPrint("Inventory scan unavailable, falling back to badge page scan");
-      }
       getBadges(1, plan);
     }
   }

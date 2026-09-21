@@ -10,7 +10,15 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
 
-import { getActiveScanFilters, mergeWithDefaults, resolveScanPlan, type ScanFilterEntry } from "../src/lib/settings";
+import {
+  getActiveScanFilters,
+  mergeWithDefaults,
+  resolveScanPlan,
+  resolveScanRoute,
+  type InventoryHealth,
+  type ScanFilterEntry,
+  type ScanPlan,
+} from "../src/lib/settings";
 
 interface TestDefaults extends Record<string, unknown> {
   inventoryScan: boolean;
@@ -114,5 +122,53 @@ describe("getActiveScanFilters", () => {
     assert.deepEqual(getActiveScanFilters(settings), [{ appId: 1, active: true }]);
     assert.deepEqual(getActiveScanFilters(null), []);
     assert.deepEqual(getActiveScanFilters({}), []);
+  });
+});
+
+describe("resolveScanRoute", () => {
+  const inventoryPlan: ScanPlan = {
+    mode: "inventory",
+    inventoryScan: true,
+    useScanFilters: false,
+    activeFilterAppIds: [],
+  };
+  const badgesPlan: ScanPlan = { mode: "badge", inventoryScan: false, useScanFilters: false, activeFilterAppIds: [] };
+  const filtersPlan: ScanPlan = {
+    mode: "filters",
+    inventoryScan: true,
+    useScanFilters: true,
+    activeFilterAppIds: [440],
+  };
+  const healthy: InventoryHealth = { inventoryOk: true, badgesDbOk: true, tradabilityOk: true };
+
+  it("proceeds with inventory discovery when inventory mode is fully healthy", () => {
+    assert.equal(resolveScanRoute(inventoryPlan, healthy), "inventory");
+  });
+
+  it("never routes inventory mode to badge pages, aborting on any failed prerequisite", () => {
+    for (let mask = 0; mask < 8; mask++) {
+      const health: InventoryHealth = {
+        inventoryOk: Boolean(mask & 1),
+        badgesDbOk: Boolean(mask & 2),
+        tradabilityOk: Boolean(mask & 4),
+      };
+      const route = resolveScanRoute(inventoryPlan, health);
+      assert.ok(route !== "badges", `health=${JSON.stringify(health)} routed to badges`);
+      assert.equal(route, mask === 7 ? "inventory" : "abort", `health=${JSON.stringify(health)}`);
+    }
+  });
+
+  it("keeps the badge-page path for badges mode regardless of health", () => {
+    for (const health of [healthy, { inventoryOk: false, badgesDbOk: false, tradabilityOk: false }]) {
+      assert.equal(resolveScanRoute(badgesPlan, health), "badges");
+    }
+  });
+
+  it("keeps filters mode off the inventory-routing decision", () => {
+    assert.equal(resolveScanRoute(filtersPlan, healthy), "badges");
+    assert.equal(
+      resolveScanRoute(filtersPlan, { inventoryOk: false, badgesDbOk: false, tradabilityOk: false }),
+      "badges",
+    );
   });
 });

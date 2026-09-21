@@ -1,6 +1,6 @@
 {
   "name": "asf-stm-enhancement",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "ASF STM Enhancement userscript: ASF bot list trade matcher for Steam Community badges",
   "type": "module",
