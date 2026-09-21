@@ -2,34 +2,39 @@
 
 ## MODIFIED Requirements
 
-### Requirement: Build always produces both distributables
+### Requirement: Build produces the single distributable
 
-The system SHALL provide a single `pnpm build` command that regenerates both `dist/ASF-STM.user.js` (release, debug lines stripped) and `dist/ASF-STM.debug.js` (debug lines kept) from `src/` plus `src/templates/` using the Node/TypeScript builder, and SHALL fail with a non-zero exit and a clear message when any template file or placeholder is missing or unreplaced. The builder SHALL discover every `src/lib/*.ts` lib generically (no hardcoded lib list) and inline its compiled output into both distributables, including libs that depend on the declared runtime-validation dependency, while keeping `dist/` single-file with no new runtime network or DOM dependencies.
+The system SHALL provide a single build command that regenerates `dist/ASF-STM.user.js` from the TypeScript sources (userscript body plus `src/lib/*.ts`, with template contents consumed as module imports rather than expanded placeholders), bundling the declared runtime-validation dependency into the single self-contained file with no new runtime network or DOM dependencies, and SHALL fail with a non-zero exit and a clear message when any source, template, or declared version is missing or unusable. No builder script and no `{{PLACEHOLDER}}` mechanism SHALL remain in the pipeline.
 
-#### Scenario: Clean build emits both files
+#### Scenario: Clean build emits the distributable
 
-- **WHEN** a contributor runs `pnpm build` from a clean `dist/` state
-- **THEN** both `dist/ASF-STM.user.js` and `dist/ASF-STM.debug.js` exist, contain the current version string, and contain no unreplaced `{{PLACEHOLDER}}` tokens
+- **WHEN** a contributor runs the documented build command from a clean `dist/` state
+- **THEN** `dist/ASF-STM.user.js` exists, contains the current version string, is a single self-contained userscript, and contains no unreplaced `{{PLACEHOLDER}}` tokens
 
-#### Scenario: Missing template fails loudly
+#### Scenario: Missing source fails loudly
 
-- **WHEN** a template file under `src/templates/` is missing or a placeholder in the userscript source has no matching template
-- **THEN** the build exits non-zero and names the missing file or placeholder instead of writing a corrupt artifact
+- **WHEN** a TypeScript source, template module, or the declared version is missing or unusable
+- **THEN** the build exits non-zero and names the missing input instead of writing a corrupt artifact
 
-#### Scenario: Release and debug variants differ only by debug lines
-
-- **WHEN** the build completes
-- **THEN** the release file contains no debug-marked lines while the debug file retains their code content, with all templates expanded identically in both
-
-#### Scenario: TypeScript libs are compiled into the bundle
+#### Scenario: Debug support ships in the single file
 
 - **WHEN** the build completes
-- **THEN** both distributables contain the compiled output of every `src/lib/*.ts` source with behavior identical to the tested lib sources, a newly added lib is picked up with no builder edit, and `tsc` typechecking passes with no errors
+- **THEN** the single distributable contains both normal and debug behavior behind a runtime debug switch, with no separate debug artifact and no debug-only line-stripping step
 
-#### Scenario: New lib is picked up without builder edits
+#### Scenario: TypeScript sources compile into the bundle
 
-- **WHEN** a contributor adds a new `src/lib/<name>.ts` file and runs `pnpm build`
-- **THEN** the build inlines it into both distributables or fails naming the userscript placeholder it needs, without requiring a change to the builder source
+- **WHEN** the build completes
+- **THEN** the distributable contains the compiled output of the TypeScript userscript and lib sources with behavior identical to the tested sources, and typechecking passes with no errors
+
+#### Scenario: Converted output matches previous behavior
+
+- **WHEN** the build runs from the converted TypeScript source and its output is compared against a reference build from the previous pipeline at the same source revision
+- **THEN** scanning, matching, and offer behavior are identical (excluding only the intended single-file/debug-switch change), confirming no conversion regression
+
+#### Scenario: Validation dependency bundles without new runtime deps
+
+- **WHEN** the build completes with the declared validation dependency installed
+- **THEN** the single distributable contains its compiled output with no new runtime network or DOM dependencies, and the file remains a single self-contained userscript
 
 ### Requirement: Unit tests verify tradability logic without a browser
 
@@ -37,10 +42,10 @@ The system SHALL ship a unit-test suite run with `pnpm test` (vitest) that verif
 
 #### Scenario: Tradability suite runs with one command
 
-- **WHEN** a contributor runs `pnpm test`
+- **WHEN** a contributor runs the documented test command
 - **THEN** all tests execute and the command exits non-zero on any failure, covering tradable/held flag variants, dated trade holds, settings merge and scan-plan resolution, payload validation (valid, malformed, and unknown-field cases), pure matching (even/uneven badges, ANY vs fair bots, balance per game), foil and non-card exclusion, asset-to-description counting, and the owned-count fallback
 
 #### Scenario: CI runs tests and verifies build outputs
 
 - **WHEN** CI runs on push or pull request
-- **THEN** it executes the typecheck, lint, unit tests, and the build, and fails the run if any of them fails or if either `dist` file is missing or still contains unreplaced placeholders
+- **THEN** it executes the typecheck, lint, unit tests, and the build, and fails the run if any of them fails or if the `dist` file is missing or still contains unreplaced placeholders
