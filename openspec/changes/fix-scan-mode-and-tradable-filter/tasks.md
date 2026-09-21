@@ -29,8 +29,8 @@
 
 ## 6. Release
 
-- [ ] 6.1 Bump the version, commit the code, push it, and verify the working tree is clean and the remote branch is up to date.
-- [ ] 6.2 Create the new GitHub release and verify the release is published with the rebuilt assets/notes.
+- [x] 6.1 Bump the version, commit the code, push it, and verify the working tree is clean and the remote branch is up to date.
+- [x] 6.2 Create the new GitHub release and verify the release is published with the rebuilt assets/notes.
 
 ## Evidence notes (task 1.1)
 
