@@ -8,7 +8,7 @@ Guarantees contributors and CI can always regenerate both distributable userscri
 
 ### Requirement: Build always produces both distributables
 
-The system SHALL provide a single `pnpm build` command that regenerates both `dist/ASF-STM.user.js` (release, debug lines stripped) and `dist/ASF-STM.debug.js` (debug lines kept) from `src/` plus `src/templates/` using the Node/TypeScript builder, and SHALL fail with a non-zero exit and a clear message when any template file or placeholder is missing or unreplaced.
+The system SHALL provide a single build command that regenerates both `dist/ASF-STM.user.js` (release, debug lines stripped) and `dist/ASF-STM.debug.js` (debug lines kept) from `src/` plus `src/templates/` by executing `scripts/build.ts` through the Oxc TypeScript runner, producing output equivalent to the previous `tsx` execution, and SHALL fail with a non-zero exit and a clear message when any template file or placeholder is missing or unreplaced.
 
 #### Scenario: Clean build emits both files
 
@@ -30,9 +30,14 @@ The system SHALL provide a single `pnpm build` command that regenerates both `di
 - **WHEN** the build completes
 - **THEN** both distributables contain the compiled output of the TypeScript lib sources with identical behavior to the previous JavaScript libs, and `tsc` typechecking passes with no errors
 
+#### Scenario: Oxc build output matches previous runner output
+
+- **WHEN** the build runs via the Oxc runner and its outputs are diffed against a reference build from the previous runner at the same source revision
+- **THEN** `dist/ASF-STM.user.js` and `dist/ASF-STM.debug.js` are identical (excluding only intended version-string changes), confirming no transform regression
+
 ### Requirement: Unit tests verify tradability logic without a browser
 
-The system SHALL ship a unit-test suite run with `pnpm test` (vitest) that verifies the tradability helpers, settings helpers, and scan-eligibility mapping with plain fixtures (no browser, no network, no new runtime dependencies beyond dev tooling) and SHALL be executed by CI together with the typecheck, lint, and build.
+The system SHALL ship a unit-test suite that verifies the tradability helpers and scan-eligibility mapping with plain fixtures (no browser, no network, no new runtime dependencies) and SHALL be runnable with a single documented command that CI also executes, with test transformation provided by the Oxc pipeline.
 
 #### Scenario: Tradability suite runs with one command
 
@@ -42,4 +47,4 @@ The system SHALL ship a unit-test suite run with `pnpm test` (vitest) that verif
 #### Scenario: CI runs tests and verifies build outputs
 
 - **WHEN** CI runs on push or pull request
-- **THEN** it executes the typecheck, lint, unit tests, and the build, and fails the run if any of them fails or if either `dist` file is missing or still contains unreplaced placeholders
+- **THEN** it executes the unit tests and the build via the Oxc runner, and fails the run if any test fails or either `dist` file is missing or still contains unreplaced placeholders
