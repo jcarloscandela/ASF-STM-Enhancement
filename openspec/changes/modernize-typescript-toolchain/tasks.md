@@ -28,5 +28,5 @@
 
 ## 6. New repository and 1.0.0 release
 
-- [ ] 6.1 Confirm the new repo owner (assumed `jcarloscandela`), create public `ASF-STM-Enhancement`, repoint `origin`, push history and tags, and verify the remote branch is up to date.
-- [ ] 6.2 Publish the `1.0.0` release from CI-built assets and verify the release page lists both distributables and the install URL matches the README.
+- [x] 6.1 Confirm the new repo owner (assumed `jcarloscandela`), create public `ASF-STM-Enhancement`, repoint `origin`, push history and tags, and verify the remote branch is up to date.
+- [x] 6.2 Publish the `1.0.0` release from CI-built assets and verify the release page lists both distributables and the install URL matches the README.
