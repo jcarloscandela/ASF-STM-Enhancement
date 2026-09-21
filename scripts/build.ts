@@ -7,7 +7,7 @@
 //
 // Run with: pnpm build
 
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ModuleKind, ScriptTarget, transpileModule } from "typescript";
@@ -177,6 +177,7 @@ function main(): void {
     fail(`unreplaced placeholders in ${path.relative(REPO_ROOT, USERSCRIPT_FILE)}: ${leftovers.join(", ")}`);
   }
 
+  mkdirSync(DIST_DIR, { recursive: true });
   writeFileSync(DEBUG_FILE, script.replaceAll("  // DEBUG", ""), { encoding: "utf8" });
 
   const releaseScript = script
