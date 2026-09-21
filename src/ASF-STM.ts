@@ -10,6 +10,14 @@ import { renderMatch } from "./templates/matchTemplate";
 import { renderRow } from "./templates/rowTemplate";
 import { mergeWithDefaults, resolveScanPlan, resolveScanRoute } from "./lib/settings";
 import type { ScanPlan } from "./lib/settings";
+import { parseInventoryAsset, parseInventoryDescription } from "./lib/steam-schema";
+import { buildMatchStore, computeMatches } from "./lib/matcher-core";
+import type {
+  MatchBadge as MatchCoreBadge,
+  MatchCard as MatchCoreCard,
+  MatchCardRef as MatchCoreCardRef,
+  MatchItem as MatchCoreItem,
+} from "./lib/matcher-core";
 import {
   buildScanEligibility,
   buildTradableCardCounts,
@@ -51,35 +59,11 @@ export interface BotsResponse {
   friends?: boolean;
 }
 
-export interface BadgeCard {
-  item: string;
-  hash: string;
-  count: number;
-  iconUrl: string;
-  number: number;
-}
+export type BadgeCard = MatchCoreCard;
 
-export interface MatchCardRef {
-  item: string;
-  count: number;
-  iconUrl: string;
-  hash: string;
-}
-
-export interface MatchItem {
-  appId: number;
-  title: string;
-  cards: MatchCardRef[];
-}
-
-export interface Badge {
-  appId: number;
-  title: string;
-  maxCards: number;
-  maxSets: number;
-  lastSet: number;
-  cards: BadgeCard[];
-}
+export type MatchCardRef = MatchCoreCardRef;
+export type MatchItem = MatchCoreItem;
+export type Badge = MatchCoreBadge;
 
 export interface ScanFilter {
   active: boolean;
@@ -726,210 +710,39 @@ export interface ProgressRadials {
     checkRow(newChild);
   }
 
-  function calcState(badge: Badge): number {
-    //state 0 - less than max sets; state 1 - we have max sets, even out the rest, state 2 - all even
-    debugPrint(
-      "maxSets=" +
-        badge.maxSets +
-        " LastSet=" +
-        badge.lastSet +
-        " Max cards=" +
-        badge.cards[badge.maxCards - 1]!.count +
-        " Min cards=" +
-        badge.cards[0]!.count,
-    );
-    if (badge.cards[badge.maxCards - 1]!.count === badge.maxSets) {
-      if (badge.cards[0]!.count === badge.lastSet) {
-        return 2; //nothing to do
-      } else {
-        return 1; //max sets are here, but we can distribute cards further
-      }
-    } else {
-      return 0; //less than max sets
-    }
-  }
-
-  function storeMatches(steamID: string, itemsToSend: MatchItem[], itemsToReceive: MatchItem[]): void {
-    let partner = getPartner(steamID);
-    tradeParams.matches[partner] = {};
-    const partnerMatches = tradeParams.matches[partner]!;
-    for (let i = 0; i < itemsToSend.length; i++) {
-      if (partnerMatches[itemsToSend[i]!.appId] === undefined) {
-        partnerMatches[itemsToSend[i]!.appId] = { send: [], receive: [] };
-      }
-      for (let c = 0; c < itemsToSend[i]!.cards.length; c++) {
-        for (let a = 0; a < itemsToSend[i]!.cards[c]!.count; a++) {
-          let cardID = tradeParams.cardNames!.indexOf(itemsToSend[i]!.cards[c]!.hash);
-          partnerMatches[itemsToSend[i]!.appId]!.send.push(cardID);
-        }
-      }
-    }
-    for (let i = 0; i < itemsToReceive.length; i++) {
-      if (partnerMatches[itemsToReceive[i]!.appId] === undefined) {
-        throw new Error("Sent and received appIDs don't match!");
-      }
-      for (let c = 0; c < itemsToReceive[i]!.cards.length; c++) {
-        for (let a = 0; a < itemsToReceive[i]!.cards[c]!.count; a++) {
-          let cardID = tradeParams.cardNames!.indexOf(itemsToReceive[i]!.cards[c]!.hash);
-          partnerMatches[itemsToReceive[i]!.appId]!.receive.push(cardID);
-        }
-      }
-      if (
-        partnerMatches[itemsToReceive[i]!.appId]!.send.length !==
-        partnerMatches[itemsToReceive[i]!.appId]!.receive.length
-      ) {
-        throw new Error(
-          "Sent and received card count don't match for " + partnerMatches[itemsToReceive[i]!.appId] + " !",
-        );
-      }
-    }
-    SaveParams();
-  }
-
+  // Matching is implemented in ./lib/matcher-core; these wrappers only adapt
+  // the userscript's host state (bot flags, card-name table, persistence).
   function compareCards(index: number, callback: () => void): void {
-    let itemsToSend: MatchItem[] = [];
-    let itemsToReceive: MatchItem[] = [];
-
     debugPrint("bot's cards");
     debugPrint(JSON.stringify(botBadges));
     debugPrint("our cards");
     debugPrint(JSON.stringify(myBadges));
 
-    for (let i = 0; i < botBadges.length; i++) {
-      let myBadge = deepClone(myBadges[i]!);
-      let theirBadge = deepClone(botBadges[i]!);
-      let myState = calcState(myBadge);
-      debugPrint("state=" + myState);
-      debugPrint("myapp=" + myBadge.appId + " botapp=" + theirBadge.appId);
-      while (myState < 2) {
-        let foundMatch = false;
-        for (let j = 0; j < theirBadge.maxCards; j++) {
-          //index of card they give
-          if (theirBadge.cards[j]!.count > 0) {
-            //try to match
-            let myInd = myBadge.cards.findIndex((a) => a.number === theirBadge.cards[j]!.number); //index of slot where we receive card
-            if (
-              (myState === 0 && myBadge.cards[myInd]!.count < myBadge.maxSets) ||
-              (myState === 1 && myBadge.cards[myInd]!.count < myBadge.lastSet)
-            ) {
-              //we need this ^Kfor the Emperor
-              debugPrint("we need this: " + theirBadge.cards[j]!.item + " (" + theirBadge.cards[j]!.count + ")");
-              //find a card to match.
-              for (let k = 0; k < myInd; k++) {
-                //index of card we give
-                debugPrint("i=" + i + " j=" + j + " k=" + k + " myState=" + myState);
-                debugPrint("we have this: " + myBadge.cards[k]!.item + " (" + myBadge.cards[k]!.count + ")");
-                if (
-                  (myState === 0 && myBadge.cards[k]!.count > myBadge.maxSets) ||
-                  (myState === 1 && myBadge.cards[k]!.count > myBadge.lastSet)
-                ) {
-                  //that's fine for us
-                  debugPrint("it's a good trade for us");
-                  let theirInd = theirBadge.cards.findIndex((a) => a.number === myBadge.cards[k]!.number); //index of slot where they will receive card
-                  if (!bots!.Result[index]!.MatchEverything) {
-                    //make sure it's neutral+ for them
-                    if (theirBadge.cards[theirInd]!.count >= theirBadge.cards[j]!.count) {
-                      debugPrint("Not fair for them");
-                      debugPrint(
-                        "they have this: " +
-                          theirBadge.cards[theirInd]!.item +
-                          " (" +
-                          theirBadge.cards[theirInd]!.count +
-                          ")",
-                      );
-                      continue; //it's not neutral+, check other options
-                    }
-                  }
-                  debugPrint("it's a match!");
-                  let itemToSend = {
-                    item: myBadge.cards[k]!.item,
-                    count: 1,
-                    iconUrl: myBadge.cards[k]!.iconUrl,
-                    hash: myBadge.cards[k]!.hash,
-                  };
-                  let itemToReceive = {
-                    item: theirBadge.cards[j]!.item,
-                    count: 1,
-                    iconUrl: theirBadge.cards[j]!.iconUrl,
-                    hash: theirBadge.cards[j]!.hash,
-                  };
-                  //fill items to send
-                  let sendmatch = itemsToSend.find((item) => item.appId == myBadge.appId);
-                  if (sendmatch === undefined) {
-                    let newMatch = {
-                      appId: myBadge.appId,
-                      title: myBadge.title,
-                      cards: [itemToSend],
-                    };
-                    itemsToSend.push(newMatch);
-                  } else {
-                    let existingCard = sendmatch.cards.find((a) => a.hash === itemToSend.hash);
-                    if (existingCard === undefined) {
-                      sendmatch.cards.push(itemToSend);
-                    } else {
-                      existingCard.count += 1;
-                    }
-                  }
-                  //add this item to their inventory
-                  theirBadge.cards[theirInd]!.count += 1;
-                  //remove this item from our inventory
-                  myBadge.cards[k]!.count -= 1;
-
-                  //fill items to receive
-                  let receiveMatch = itemsToReceive.find((item) => item.appId == myBadge.appId);
-                  if (receiveMatch === undefined) {
-                    let newMatch = {
-                      appId: myBadge.appId,
-                      title: myBadge.title,
-                      cards: [itemToReceive],
-                    };
-                    itemsToReceive.push(newMatch);
-                  } else {
-                    let existingCard = receiveMatch.cards.find((a) => a.hash === itemToReceive.hash);
-                    if (existingCard === undefined) {
-                      receiveMatch.cards.push(itemToReceive);
-                    } else {
-                      existingCard.count += 1;
-                    }
-                  }
-                  //add this item to our inventory
-                  myBadge.cards[myInd]!.count += 1;
-                  //remove this item from their inventory
-                  theirBadge.cards[j]!.count -= 1;
-                  foundMatch = true;
-                  break; //found a match!
-                }
-              }
-              if (foundMatch) {
-                //if we found something - we need to sort cards again and start over.
-                myBadge.cards.sort((a, b) => b.count - a.count);
-                myState = calcState(myBadge);
-                debugPrint("new myState=" + myState);
-              }
-            }
-          }
-        }
-        if (!foundMatch) {
-          break; //found no matches - move to next badge
-        }
-        theirBadge.cards.sort((a, b) => b.count - a.count);
-      }
-    }
+    const result = computeMatches(myBadges, botBadges, index, {
+      debugPrint,
+      isMatchEverything: (botIndex) => Boolean(bots!.Result[botIndex]!.MatchEverything),
+    });
 
     debugPrint("items to send");
-    debugPrint(JSON.stringify(itemsToSend));
+    debugPrint(JSON.stringify(result.itemsToSend));
     debugPrint("items to receive");
-    debugPrint(JSON.stringify(itemsToReceive));
-    bots!.Result[index]!.itemsToSend = itemsToSend;
-    bots!.Result[index]!.itemsToReceive = itemsToReceive;
-    if (itemsToSend.length > 0) {
-      storeMatches(bots!.Result[index]!.SteamID, itemsToSend, itemsToReceive);
+    debugPrint(JSON.stringify(result.itemsToReceive));
+    bots!.Result[index]!.itemsToSend = result.itemsToSend;
+    bots!.Result[index]!.itemsToReceive = result.itemsToReceive;
+    if (result.itemsToSend.length > 0) {
+      storeMatches(bots!.Result[index]!.SteamID, result.itemsToSend, result.itemsToReceive);
       addMatchRow(index);
       callback();
     } else {
       debugPrint("no matches");
       callback();
     }
+  }
+
+  function storeMatches(steamID: string, itemsToSend: MatchItem[], itemsToReceive: MatchItem[]): void {
+    const partner = getPartner(steamID);
+    tradeParams.matches[partner] = buildMatchStore(itemsToSend, itemsToReceive, tradeParams.cardNames!);
+    SaveParams();
   }
 
   function GetOwnCards(index: number): void {
@@ -1551,12 +1364,15 @@ export interface ProgressRadials {
 
       const data: any = await response.json();
 
-      // Keep only item_class_2 descriptions
+      // Validate each entry before it can influence counting: malformed
+      // entries are skipped, unknown Steam fields are ignored.
       if (data.descriptions) {
-        for (const description of data.descriptions) {
-          const itemClass = description.tags?.find(
-            (tag: { category?: string; internal_name?: string }) => tag.category === "item_class",
-          );
+        for (const raw of data.descriptions) {
+          const description = parseInventoryDescription(raw);
+          if (!description) {
+            continue;
+          }
+          const itemClass = description.tags?.find((tag) => tag.category === "item_class");
 
           if (itemClass?.internal_name === "item_class_2") {
             inventory.descriptions.push(description);
@@ -1566,7 +1382,12 @@ export interface ProgressRadials {
 
       // Keep the assets from this page
       if (data.assets) {
-        inventory.assets.push(...data.assets);
+        for (const raw of data.assets) {
+          const asset = parseInventoryAsset(raw);
+          if (asset) {
+            inventory.assets.push(asset);
+          }
+        }
       }
 
       inventory.success = data.success;

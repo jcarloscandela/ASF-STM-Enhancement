@@ -10,14 +10,16 @@ changes here. When the two disagree about commands or layout, fix this file
 ASF bot-list trade matcher for Steam Community badges, shipped as a
 single-file TypeScript userscript. The scanner matches
 the user's tradable cards against ASF bot lists and friends and generates
-trade offers. Version `1.0.2`, new home
+trade offers. Version `1.0.4`, new home
 `https://github.com/jcarloscandela/ASF-STM-Enhancement`.
 
 ## Layout
 
 - `src/ASF-STM.ts` — userscript source (strict TypeScript, bundled by
   rolldown into the single distributable).
-- `src/lib/*.ts` — strict TypeScript libs (`tradable`, `settings`):
+- `src/lib/*.ts` — strict TypeScript libs: `tradable` (tradability/counting),
+  `settings` (validated defaults, merge, scan-plan routing), `steam-schema`
+  (Zod-validated Steam payloads), `matcher-core` (pure trade matching). All
   unit-tested via vitest and bundled via normal imports.
 - `src/templates/` — HTML/CSS fragments consumed as TypeScript module
   imports (`*.ts` render functions, `css.css` raw text); no placeholders.

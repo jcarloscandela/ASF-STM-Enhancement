@@ -1,8 +1,9 @@
 // Shared settings helpers for ASF-STM-Enhancement.
 //
-// Single source of truth: vitest imports this module directly, and the build
-// script compiles it and inlines the output into the userscript
-// (SETTINGS_LIB slot) so the distributed userscripts stay single-file.
+// Single source of truth: vitest imports this module directly, and the lib is
+// bundled into the single-file userscript via the normal rolldown import.
+
+import { z } from "zod/mini";
 
 /** One entry of the persisted scan-filter list. */
 export interface ScanFilterEntry {
@@ -27,19 +28,78 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Declared shape of the persisted settings. Fields are permissive here: the
+// envelope parse only establishes "this is a settings object", while type
+// strictness is enforced per key by `validateAgainstDefault` so one bad field
+// never discards the user's other stored values.
+const settingsSchema = z.looseObject({
+  matchFriends: z.optional(z.unknown()),
+  inventoryScan: z.optional(z.unknown()),
+  inventoryScanDelay: z.optional(z.unknown()),
+  anyBots: z.optional(z.unknown()),
+  fairBots: z.optional(z.unknown()),
+  sortByName: z.optional(z.unknown()),
+  sortBotsBy: z.optional(z.unknown()),
+  botMinItems: z.optional(z.unknown()),
+  botMaxItems: z.optional(z.unknown()),
+  weblimiter: z.optional(z.unknown()),
+  errorLimiter: z.optional(z.unknown()),
+  debug: z.optional(z.unknown()),
+  maxErrors: z.optional(z.unknown()),
+  filterBackgroundColor: z.optional(z.unknown()),
+  preventClose: z.optional(z.unknown()),
+  tradeMessage: z.optional(z.unknown()),
+  autoSend: z.optional(z.unknown()),
+  doAfterTrade: z.optional(z.unknown()),
+  order: z.optional(z.unknown()),
+  useScanFilters: z.optional(z.unknown()),
+  scanFilters: z.optional(z.unknown()),
+  autoAddScanFilters: z.optional(z.unknown()),
+  autoDeleteScanFilters: z.optional(z.unknown()),
+});
+
+/** Keys this settings schema knows about, for drop-unknown diagnostics. */
+export type SettingsKey = keyof z.infer<typeof settingsSchema>;
+
+// Validates one stored value against its default's kind. Wrong-typed values
+// fall back to the default for that key while other stored keys survive, so a
+// corrupt field never discards the rest of the user's configuration. Unknown
+// keys and explicitly falsy values are preserved exactly as before.
+function validateAgainstDefault(value: unknown, fallback: unknown): unknown {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof fallback === "boolean") {
+    return typeof value === "boolean" ? value : fallback;
+  }
+  if (typeof fallback === "number") {
+    return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  }
+  if (typeof fallback === "string") {
+    return typeof value === "string" ? value : fallback;
+  }
+  if (Array.isArray(fallback)) {
+    return Array.isArray(value) ? value : fallback;
+  }
+  return value;
+}
+
 // Merges persisted settings over the defaults: stored values win (including
 // explicit false/0), missing keys receive a fresh copy of their default, and
-// unknown stored keys are preserved. A missing or corrupt stored object yields
-// the defaults, so a stored `inventoryScan: true` is never clobbered.
+// unknown stored keys are preserved. A wrong-typed stored value falls back to
+// its default per key. A missing or corrupt stored object yields the defaults,
+// so a stored `inventoryScan: true` is never clobbered.
 export function mergeWithDefaults(stored: unknown, defaults: Record<string, unknown>): Record<string, unknown> {
   const merged: Record<string, unknown> = {};
   for (const key of Object.keys(defaults)) {
     merged[key] = cloneSettingValue(defaults[key]);
   }
-  if (isRecord(stored)) {
-    for (const key of Object.keys(stored)) {
-      if (stored[key] !== undefined) {
-        merged[key] = stored[key];
+  const parsed = settingsSchema.safeParse(stored);
+  if (parsed.success) {
+    const values = parsed.data as Record<string, unknown>;
+    for (const key of Object.keys(values)) {
+      if (values[key] !== undefined) {
+        merged[key] = validateAgainstDefault(values[key], merged[key]);
       }
     }
   }

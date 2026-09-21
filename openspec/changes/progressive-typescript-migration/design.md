@@ -34,9 +34,9 @@ Alternatives: `valibot` (smaller bundle, less contributor familiarity), `arktype
 
 Each lib bundles via the existing rolldown imports; `ASF-STM.ts` keeps thin wrappers so the userscript diff per slice is small and reviewable.
 
-### 3. Zod rides normal imports; measure the size delta
+### 3. Zod, pruned to `zod/mini` (measured)
 
-`import { z } from "zod"` in a lib is bundled by rolldown like any other dependency — no pre-bundling, no vendoring, no builder edits. Record the `dist/` size delta when the first Zod lib lands; if the growth is disproportionate, scope schemas to minimal field sets (or `zod/mini`) per the bundle-size risk below.
+`import { z } from "zod"` bundles through rolldown with no builder edits, but the measured delta is **+126 KB** (105,571 → 231,829 bytes) — unbundled tree-shaking keeps the full Zod core. Decision: use **`zod/mini`** (`import { z } from "zod/mini"`), whose functional API is separately tree-shakeable. Measured: **+5.5 KB** for a trivial schema (105,571 → 111,115 bytes); the real `steam-schema.ts` lib measures **+37.9 KB** (105,571 → 143,470 bytes, ~+36%) once inventory/badge/bot validators are included — still well under the 50 KB gzipped budget, with 0 placeholders and `pnpm typecheck` green.
 
 ### 4. Equivalence testing per slice
 
@@ -44,7 +44,7 @@ Each lib ships a vitest suite with plain fixtures copied from real Steam shapes 
 
 ## Risks / Trade-offs
 
-- [Zod bundle size inflates the userscript] → Mitigation: measure `dist/` delta when the first Zod lib lands; if >~50KB gzipped, scope schemas to the minimal field sets and consider `zod/mini`.
+- [Zod bundle size inflates the userscript] → **Measured: full Zod adds +126 KB; `zod/mini` adds only +5.5 KB (105,571 → 111,115 bytes).** Ship `zod/mini`; fall back to scoped hand-rolled guards only if a future schema pulls the full core back in.
 - [Oxc runner strips types without checking; Zod misuse ships silently] → Mitigation: CI `typecheck` stays mandatory; `safeParse` return values must be asserted in tests.
 - [Behavior drift during extraction] → Mitigation: move code without logic changes first, golden-equivalence tests, wrapper swap only when green; no logic "improvements" inside migration slices.
 - [Steam changes payload shapes] → Mitigation: lenient schemas + skip-entry semantics; new-field fixture added when observed.
