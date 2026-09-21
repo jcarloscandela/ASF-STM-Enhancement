@@ -1,0 +1,29 @@
+{
+  "name": "asf-stm-enhancement",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ASF STM Enhancement userscript: ASF bot list trade matcher for Steam Community badges",
+  "type": "module",
+  "packageManager": "pnpm@12.3.4",
+  "scripts": {
+    "build": "rolldown -c",
+    "test": "node --import @oxc-node/core/register ./node_modules/vitest/vitest.mjs run",
+    "lint": "oxlint",
+    "format": "oxfmt src scripts test rolldown.config.ts",
+    "format:check": "oxfmt --check src scripts test rolldown.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@oxc-node/cli": "0.1.3",
+    "@oxc-node/core": "0.1.3",
+    "@types/node": "^26.6.2",
+    "oxfmt": "^0.68.0",
+    "oxlint": "^1.19.0",
+    "rolldown": "1.2.9",
+    "typescript": "7.0.2",
+    "vitest": "^5.0.1"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  }
+}
