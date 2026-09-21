@@ -1,2 +1,5 @@
 # Releases
 dist/
+# Build output and dependencies
+build/
+node_modules/

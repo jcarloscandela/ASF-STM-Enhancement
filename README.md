@@ -1,76 +1,73 @@
-# ASF-STM userscript
+# ASF-STM-Enhancement
+
+ASF bot-list trade matcher for Steam Community badges, shipped as a single-file userscript with release and debug variants.
+
+## Origin and reinstall notice
+
+This project began as a fork of `iBreakEverything/ASF-STM-Enhancement` (itself derived from the original [ASF-STM by Rudokhvist](https://github.com/Rudokhvist/ASF-STM)) and has since diverged substantially: TypeScript libs, vitest suite, `pnpm` toolchain, Node-based build, and a version reset to `1.0.0`.
+
+The old fork repository has been deleted, so Tampermonkey auto-update continuity from old installs is broken. **Reinstall from the new release page below** (old `6.x` installs will not auto-update).
+
+New home: `https://github.com/jcarloscandela/ASF-STM-Enhancement`
+
+## Features
+
+- Inventory scan: scan your inventory in only ~10 seconds for typical libraries (\~6,000 card items; +3s per extra ~2,000 items).
+- Friend match: match with your public-inventory friends (friends-only/private inventories mark badges as private).
+- Scan filters: add badge `appId` filters to skip full scans and cut scan time.
+- Trade matching: match your tradable cards against ASF bot lists and friends, then offer trades per badge, for all results, or for filtered results.
+- Tradability-aware counting: excludes non-tradable cards, foil cards, dated trade holds (`Tradable After`), and non-card items; falls back to badge-page owned counts when inventory data is unknown.
+- Updated UI: clickable buttons, nickname sanitization, scrollable menus, links to trade partner badges, scan progress bar.
+- Release/debug distributables: `dist/ASF-STM.user.js` (debug lines stripped) and `dist/ASF-STM.debug.js` (debug lines kept), built from one command.
 
 ## Installation
-Install [Tampermonkey](https://www.tampermonkey.net/) for your browser.\
-Allow userscripts by navigating to **chrome://extensions**, clicking **Details** on Tampermonkey and enabling **Allow User Scripts**.\
-Go to [the latest release](https://github.com/iBreakEverything/ASF-STM-Enhancement/releases/latest) and click on **ASF-STM.user.js** entry in assets.
+
+1. Install [Tampermonkey](https://www.tampermonkey.net/) for your browser.
+2. In Chromium-based browsers, allow userscripts: go to `chrome://extensions`, open Details on Tampermonkey, enable **Allow User Scripts**.
+3. Go to [the latest release](https://github.com/jcarloscandela/ASF-STM-Enhancement/releases/latest) and install **ASF-STM.user.js** from the assets (use **ASF-STM.debug.js** only for troubleshooting).
 
 ## Usage
-* [Install](https://github.com/iBreakEverything/ASF-STM-Enhancement?tab=readme-ov-file#installation) the script.
-* Navigate to [your Steam badges](https://steamcommunity.com/my/badges/) page.
-  * **Optional**: Match with your friends
-    1. Click on ⚙️ button.
-    2. Check `Match with friends` checkbox.
-    3. Click Save.
-  * **Advanced**: Scan Filters
-    1. Click on ⚙️ button.
-    2. Go to `Scan filters` tab.
-    3. Insert appId of desired badge you want to match.
-    4. Click Save.
-* Click on `Scan ASF STM` button, right to your avatar.
-* Wait for initial scan to complete.
-* Scan results will start to pop up. Offer a trade for each badge, offer a trade for all or filter the results and offer a trade for all remaining.
 
-## Description
-It does what the original [ASF-STM (by Rudokhvist)](https://github.com/Rudokhvist/ASF-STM) script does with some extra features.
+1. [Install](#installation) the script.
+2. Navigate to [your Steam badges](https://steamcommunity.com/my/badges/) page.
+   - **Optional**: match with friends:
+     1. Click the ⚙️ button.
+     2. Check `Match with friends`.
+     3. Click Save.
+   - **Advanced**: scan filters:
+     1. Click the ⚙️ button.
+     2. Go to the `Scan filters` tab.
+     3. Add the `appId` of each badge you want to match.
+     4. Click Save.
+3. Click the `Scan ASF STM` button next to your avatar.
+4. Wait for the initial scan to complete.
+5. Offer a trade per badge, for all results, or filter first and offer for the remainder.
 
 ## Development
-Run the unit tests (Node.js only, no dependencies):
 
+Prerequisites: Node.js 22+ and [pnpm](https://pnpm.io/) 12 (see `packageManager` in `package.json`).
+
+```sh
+pnpm install --frozen-lockfile
+pnpm typecheck   # tsc --noEmit (strict)
+pnpm lint        # oxlint
+pnpm test        # vitest run
+pnpm build       # rebuild dist/ASF-STM.user.js + dist/ASF-STM.debug.js
+pnpm format      # oxfmt write
+pnpm format:check  # oxfmt --check
 ```
-node --test test/*.test.js
-```
 
-Build both distributables (`dist/ASF-STM.user.js` and `dist/ASF-STM.debug.js`):
+CI (`.github/workflows/build.yml`) runs typecheck, lint, tests, and build on push/PR, then verifies both `dist/` files exist with no unreplaced `{{PLACEHOLDER}}` tokens.
 
-```
-python script/build.py
-```
+### Layout
 
-## Added features
-- Invenotry scan: scan your inventory in only 10\* seconds!
-- Friend match: match with your public-inventory friends (friends-only/private inventories will mark the badges as private).
-- Scan filters: you don't want to scan the badges every time? add some filters and reduce your scan time considerably!
-- Updated UI for better UX: buttons are now clickable (not just the text), nickname sanitization, scrollable menus, link to trade partener's badge.
-- **DEV** Templates: now it's easier to work on those JavaScript template strings containing HTML or CSS.
-- **DEV** Build tool: script is automatically compiled, templates are minified and version bump triggers the release workflow.
-- **DEV** Automatic releases: every version bump a draft release will be generated for convenience.
+- `src/ASF-STM.js` — userscript body (stays JavaScript in this iteration).
+- `src/lib/*.ts` — strict TypeScript libs (`tradable`, `settings`), unit-tested via vitest and compiled/inlined into the bundle at build time.
+- `src/templates/` — HTML/CSS/JS fragments expanded into `{{PLACEHOLDERS}}` by the build.
+- `scripts/build.ts` — Node/TypeScript builder (run via `pnpm build`); fails non-zero naming any missing template or placeholder.
+- `test/*.test.ts` — vitest suite (plain fixtures, no browser/network).
+- `dist/` — gitignored build output, published as release assets.
 
-## WIP:
-- [Add your request here](https://github.com/iBreakEverything/ASF-STM-Enhancement/pulls)
-- Duplicate list
+### Versioning and releases
 
-## Changelog
-Version | Date | Info
-:-: | :-: | :-
-**v6.0.0.12** | 2026-08-08 | Added efficent inventory fetching, making searches up to 8900% faster\*\*.
-v5.8.0 | 2026-07-31 | Change local storage config name in preparation to new update
-v5.7.4 | 2026-07-26 | Reduce the additional time consumption caused by 302 redirects when getting cards. ([8b891b7 by HCLonely](https://github.com/Rudokhvist/ASF-STM/commit/8b891b7087d1bf9e2803a1970aa0d97ec22eb35f)), various fixes and improvements
-v5.7.3 | 2025-07-03 | Various bug fixes
-v5.7.2 | 2025-06-29 | Solve private inventories scans
-v5.7.1 | 2025-06-29 | Fix scan filter bugs
-v5.7.0 | 2025-06-11 | Massive improvements to Scan Filters, Stop logic and progress bar
-\*v5.6.x | 2025-06-08 | WIP new visual progress bar
-\*v5.5.x | 2025-06-08 | Experimental ISteamApps/GetAppList filters fething
-v5.4.0 | 2025-03-25 | User file and debug file
-v5.3.1 | 2025-03-25 | Filter match count
-v5.3.0 | 2025-03-25 | Critical bug fix #37
-v5.2.2 | 2025-03-15 | Latest version, all features added
-v5.2.0 | 2025-03-15 | Filter fixes, optimizations, UI enchancements
-v5.1.0 | 2025-03-03 | Misc fixes
-**v5.0.13** | 2024-12-27 | Fiends, Filters and CI/CD
-v4.2 | 2024-10-22 | Latest [ASF-STM](https://github.com/Rudokhvist/ASF-STM) release by Rudokhvist
-
-\*  10 seconds for 6000 card items inventories, +3 seconds for every 2000 items.
-
-\*\*  Based on the old average badge page scan of 30 minutes (20 pages) and new inventory scan of 20 seconds (6 request of 2000 items).
+The single version source is `package.json` (`1.0.0`). The build injects it into both userscript headers, so shipped files, package metadata, and the release tag always agree. Bumping the version on the default branch (`master`) runs the full pipeline and drafts a GitHub release named `ASF-STM-Enhancement V<version>` carrying both distributables.
