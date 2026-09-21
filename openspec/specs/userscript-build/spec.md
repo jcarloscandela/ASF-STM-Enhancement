@@ -8,12 +8,12 @@ Guarantees contributors and CI can always regenerate the distributable userscrip
 
 ### Requirement: Build produces the single distributable
 
-The system SHALL provide a single build command that regenerates `dist/ASF-STM.user.js` from the TypeScript sources (userscript body plus `src/lib/*.ts`, with template contents consumed as module imports rather than expanded placeholders), bundling the declared runtime-validation dependency into the single self-contained file with no new runtime network or DOM dependencies, and SHALL fail with a non-zero exit and a clear message when any source, template, or declared version is missing or unusable. No builder script and no `{{PLACEHOLDER}}` mechanism SHALL remain in the pipeline.
+The system SHALL provide a single build command that regenerates `dist/ASF-STM.user.js` from the TypeScript sources (userscript body plus `src/lib/*.ts`, with template contents consumed as module imports rather than expanded placeholders), bundling the declared runtime-validation dependency into the single self-contained file with no new runtime network or DOM dependencies, and SHALL fail with a non-zero exit and a clear message when any source, template, or declared version is missing or unusable. No builder script and no `{{PLACEHOLDER}}` mechanism SHALL remain in the pipeline. The rebuilt file SHALL carry this fix with behavior identical to the tested sources and SHALL remain installable via the existing Tampermonkey/GreasyFork flow with no alternative runtime or install mechanism.
 
 #### Scenario: Clean build emits the distributable
 
 - **WHEN** a contributor runs the documented build command from a clean `dist/` state
-- **THEN** `dist/ASF-STM.user.js` exists, contains the current version string, is a single self-contained userscript, and contains no unreplaced `{{PLACEHOLDER}}` tokens
+- **THEN** `dist/ASF-STM.user.js` exists, contains the current version string, is a single self-contained userscript, contains no unreplaced `{{PLACEHOLDER}}` tokens, and no longer throws on the zero-pending scan path
 
 #### Scenario: Missing source fails loudly
 

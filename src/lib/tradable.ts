@@ -17,6 +17,8 @@ import type {
   InventoryCardCounts,
   InventoryCardData,
   InventoryData,
+  MatchBadge,
+  MatchCard,
   ScanEligibilityEntry,
   SteamDescriptionLine,
   SteamInventoryAsset,
@@ -30,6 +32,8 @@ export type {
   InventoryCardCounts,
   InventoryCardData,
   InventoryData,
+  MatchBadge,
+  MatchCard,
   ScanEligibilityEntry,
   SteamDescriptionLine,
   SteamInventoryAsset,
@@ -373,4 +377,47 @@ export function buildScanEligibility(
   }
 
   return scanResult;
+}
+
+// Derives one candidate badge from a known card list (bundled dataset or the
+// browser card cache) combined with the inventory counting pass: every card of
+// the set becomes a slot - zero-owned cards included, so the receive side can
+// resolve them - with owned/tradable counts taken from the inventory. Returns
+// undefined when the data cannot produce a trustworthy badge: set sizes below
+// the five-card minimum (the old badge-API guard) or a card list whose length
+// disagrees with the set size.
+export function buildBadgeFromCardList(
+  appId: number,
+  title: string,
+  size: number,
+  cardList: Array<{ hash: string; title?: string; iconUrl?: string }>,
+  cardCounts: InventoryCardCounts,
+): MatchBadge | undefined {
+  if (size < 5) {
+    return undefined;
+  }
+  if (cardList.length !== size) {
+    return undefined;
+  }
+
+  const cards: MatchCard[] = cardList.map((card, index) => {
+    const perHash = cardCounts[appId]?.[card.hash];
+    return {
+      item: card.title ?? card.hash,
+      hash: card.hash,
+      count: perHash?.owned ?? 0,
+      tradableCount: perHash?.tradable ?? 0,
+      iconUrl: card.iconUrl ?? "",
+      number: index,
+    };
+  });
+
+  return {
+    appId,
+    title,
+    maxCards: size,
+    maxSets: 0,
+    lastSet: 0,
+    cards,
+  };
 }

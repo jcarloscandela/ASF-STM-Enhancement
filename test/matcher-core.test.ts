@@ -199,6 +199,32 @@ describe("computeMatches", () => {
     assert.equal(cardCount(result.itemsToReceive), 1);
   });
 
+  it("keeps held cards out for fair bots while capping offers at tradable capacity", () => {
+    // Scenario 1 against a fair (non-ANY) bot: the bot-side fairness check
+    // declines the third swap once received Card A catches up, so exactly two
+    // swaps result — and none requests the owned-but-held card 3.
+    const mine = [badge(440, [5, 0, 0, 1, 0], [5, 0, 0, 0, 0])];
+    const theirs = [badge(440, [0, 2, 2, 2, 2])];
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => false }));
+
+    assert.deepEqual(sideShape(result.itemsToSend), ["440-hash-0x2"]);
+    assert.deepEqual(sideShape(result.itemsToReceive), ["440-hash-1x1", "440-hash-2x1"]);
+    assert.equal(cardCount(result.itemsToSend), cardCount(result.itemsToReceive));
+  });
+
+  it("never re-offers a just-received card across iterations", () => {
+    // Multi-swap accounting: sends decrement owned+tradable, receives increment
+    // both — yet a received card can never satisfy a later give check, because
+    // receives only happen below the set target while gives require surplus
+    // above it. Every sent copy here is Card A within its tradable capacity.
+    const mine = [badge(7, [4, 0, 0], [4, 0, 0])];
+    const theirs = [badge(7, [0, 1, 3])];
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
+
+    assert.deepEqual(sideShape(result.itemsToSend), ["7-hash-0x2"]);
+    assert.deepEqual(sideShape(result.itemsToReceive), ["7-hash-1x1", "7-hash-2x1"]);
+  });
+
   it("is deterministic across repeated runs", () => {
     const build = (): MatchBadge[] => [badge(440, [4, 1, 1, 1]), badge(570, [0, 3, 2, 1])];
     const first = computeMatches(build(), build(), 0, deps({ isMatchEverything: () => true }));
@@ -217,12 +243,14 @@ describe("resolveCardIds", () => {
     assert.deepEqual(ids, [1, 1]);
   });
 
-  it("keeps -1 for hashes missing from the table", () => {
+  it("appends hashes missing from the table instead of storing -1", () => {
+    const table: string[] = [];
     const ids = resolveCardIds(
       [{ appId: 1, title: "t", cards: [{ item: "x", count: 1, iconUrl: "", hash: "zz" }] }],
-      [],
+      table,
     );
-    assert.deepEqual(ids, [-1]);
+    assert.deepEqual(ids, [0]);
+    assert.deepEqual(table, ["zz"]);
   });
 });
 

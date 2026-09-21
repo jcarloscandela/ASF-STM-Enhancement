@@ -80,3 +80,13 @@ The pure matcher SHALL treat the user's per-card counts as two quantities: owned
 
 - **WHEN** the matcher receives badges whose cards carry only owned counts
 - **THEN** the offer capacity of each card equals its owned count, preserving the pre-change behavior for those badges
+
+#### Scenario: Fair-bot mode keeps held cards out and caps offers at tradable capacity
+
+- **WHEN** the user owns five tradable copies of Card A, one held copy of Card D, and zero copies of Cards B, C, and E, and a fair (non-ANY) partner holds two copies of every card
+- **THEN** no proposed swap requests Card D, the total offered copies of Card A never exceed its tradable count, and every proposed swap keeps offered and requested counts balanced
+
+#### Scenario: Multi-iteration accounting tracks the post-trade state
+
+- **WHEN** the matcher proposes successive swaps within one badge
+- **THEN** each send decrements both the owned and the tradable remainder of the sent card and each receive increments both of the received card, so later iterations never offer a copy that is no longer owned or no longer tradable

@@ -11,8 +11,39 @@ import { renderRow } from "./templates/rowTemplate";
 import { loadSettings, resetSettings, resolveScanPlan, saveSettings } from "./lib/settings";
 import type { ScanPlan } from "./lib/settings";
 import { parseInventoryAsset, parseInventoryDescription } from "./lib/steam-schema";
-import { buildMatchStore, computeMatches } from "./lib/matcher-core";
-import { buildInventoryCardCounts, buildScanEligibility, isTradeOfferItemTradable } from "./lib/tradable";
+import {
+  buildMatchStore,
+  computeMatches,
+  resolvePartnerMatches,
+  resolveTradeCards,
+  resolveTradeFilter,
+  tradePartnerKeyCandidates,
+  type StoredMatchCards,
+} from "./lib/matcher-core";
+import { applyBadgeSetSizes, hasMatchableDistribution, parseGamecardsPage, sortBadgeCardsDesc } from "./lib/badge-page";
+import {
+  buildTradeBaseUrl,
+  compareMatchNames,
+  defaultBotAvatarHash,
+  planFilterUpdate,
+  populateCardsHtml,
+} from "./lib/match-row";
+import { getRandomOfferIndex, isOneToOneTrade, planOfferSelection, type OfferPoolItem } from "./lib/offer-writer";
+import {
+  buildRateLimitFailFastError,
+  classifySteamError,
+  RateLimitCircuitBreaker,
+  type SteamErrorCategory,
+} from "./lib/resilience";
+import { buildBadgeFromCardList, buildInventoryCardCounts, buildScanEligibility } from "./lib/tradable";
+import {
+  normalizeDataset,
+  readBadgeCardCache,
+  writeBadgeCardCacheEntry,
+  type BadgeCardCache,
+  type BadgeDataset,
+} from "./lib/dataset";
+import badgeCardsJson from "../data/badge_cards.json";
 import {
   arrayToText,
   deepClone,
@@ -57,9 +88,17 @@ declare const unsafeWindow: any;
   let myBadges: Badge[] = [];
   let botBadges: Badge[] = [];
   let inventoryCardCounts: InventoryCardCounts | null = null;
+  // Single bundled dataset: rich card lists (hashes + titles + icon paths)
+  // plus size-only entries folded in from the old counts export.
+  let cardDataset: BadgeDataset = {};
+  let badgeCardCache: BadgeCardCache = {};
+  let remoteBadgeCardData: Record<string, BadgeCardInfo> | null = null;
   let scanRunId = 0;
   let stop = false;
   let botCacheTime = 5 * 60000;
+  // Global circuit breaker over Steam scan requests: community rate limits
+  // apply per session/IP, so one shared breaker gates all three request flows.
+  const scanBreaker = new RateLimitCircuitBreaker();
   let globalSettings!: UserSettings;
   let blacklist: string[] = [];
   let progressRadials: ProgressRadials = {
@@ -305,9 +344,7 @@ declare const unsafeWindow: any;
   }
 
   function SaveParams() {
-    if (tradeParams.cardNames === undefined) {
-      tradeParams.cardNames = Array.from(cardNames);
-    }
+    tradeParams.cardNames = Array.from(cardNames);
     debugPrint(JSON.stringify(tradeParams.filter));
     writeJson(localStorage, STORAGE_KEYS.params, tradeParams);
   }
@@ -393,24 +430,6 @@ declare const unsafeWindow: any;
     }
   }
 
-  function populateCards(item: MatchItem): string {
-    let htmlCards = "";
-    for (let j = 0; j < item.cards.length; j++) {
-      let itemIcon = item.cards[j]!.iconUrl;
-      let itemName = item.cards[j]!.item;
-      for (let k = 0; k < item.cards[j]!.count; k++) {
-        let cardTemplate = `
-                    <div class="showcase_slot">
-                        <img class="image-container" src="${itemIcon}/98x115">
-                        <div class="commentthread_subscribe_hint" style="width: 98px;">${itemName}</div>
-                    </div>
-                `;
-        htmlCards += cardTemplate.replaceAll(/(  |\n)/g, "");
-      }
-    }
-    return htmlCards;
-  }
-
   function checkRow(row: HTMLElement): void {
     debugPrint("checkRow");
     let matches = row.getElementsByClassName("badge_row");
@@ -433,30 +452,16 @@ declare const unsafeWindow: any;
     let itemsToSend = bots!.Result[index]!.itemsToSend!;
     let itemsToReceive = bots!.Result[index]!.itemsToReceive!;
 
-    // sort by game name
-    function compareNames(a: MatchItem, b: MatchItem): number {
-      const nameA = a.title;
-      const nameB = b.title;
-      if (nameA < nameB) {
-        return -1;
-      }
-      if (nameA > nameB) {
-        return 1;
-      }
-      return 0;
-    }
-
     if (globalSettings.sortByName) {
-      itemsToSend.sort(compareNames);
-      itemsToReceive.sort(compareNames);
+      itemsToSend.sort(compareMatchNames);
+      itemsToReceive.sort(compareMatchNames);
     }
 
-    let tradeUrl = "https://steamcommunity.com/tradeoffer/new/?partner=";
-    if (globalSettings.matchFriends) {
-      tradeUrl += `${bots!.Result[index]!.SteamID}&source=asfstm`;
-    } else {
-      tradeUrl += `${getPartner(bots!.Result[index]!.SteamID)}&token=${bots!.Result[index]!.TradeToken}&source=asfstm`;
-    }
+    const tradeUrl = buildTradeBaseUrl(
+      globalSettings.matchFriends,
+      bots!.Result[index]!.SteamID,
+      bots!.Result[index]!.TradeToken,
+    );
     debugPrint(tradeUrl);
 
     let botProfileLink = globalSettings.matchFriends
@@ -473,7 +478,6 @@ declare const unsafeWindow: any;
       appIdList.push(appId);
       let itemToReceive = itemsToReceive.find((a) => a.appId == appId);
       let gameName = itemsToSend[i]!.title;
-      let display = "inline-block";
 
       //remove placeholder
       let filterWidget = document.getElementById("asf_stm_filters_body") as HTMLElement;
@@ -483,7 +487,9 @@ declare const unsafeWindow: any;
       }
       //add filter
       let checkBox = document.getElementById("astm_" + appId) as HTMLInputElement | null;
-      if (checkBox === null) {
+      const filterUpdate = planFilterUpdate(checkBox === null, checkBox?.checked ?? true);
+      let display = filterUpdate.display;
+      if (filterUpdate.addedToFilter) {
         let newFilter = `<span style="margin-right: 15px; white-space: nowrap; display: inline-block;"><input type="checkbox" id="astm_${appId}" checked="" /><label for="astm_${appId}" data-count="1">${gameName} <b>(1)</b></label></span>`;
         let spanTemplate = document.createElement("template");
         spanTemplate.innerHTML = newFilter.trim();
@@ -492,15 +498,12 @@ declare const unsafeWindow: any;
         SaveParams();
       } else {
         /* Increment match count */
-        const label = checkBox.parentElement!.querySelector("label") as HTMLElement;
+        const label = checkBox!.parentElement!.querySelector("label") as HTMLElement;
         label.dataset.count = String(parseInt(label.dataset.count ?? "") + 1);
-        if (checkBox.checked === false) {
-          display = "none";
-        }
       }
 
-      let sendResult = populateCards(itemsToSend[i]!);
-      let receiveResult = populateCards(itemToReceive!);
+      let sendResult = populateCardsHtml(itemsToSend[i]!);
+      let receiveResult = populateCardsHtml(itemToReceive!);
 
       let tradeUrlApp = tradeUrl + "&match=" + appId;
 
@@ -520,8 +523,7 @@ declare const unsafeWindow: any;
     }
     let tradeUrlFull = tradeUrl + "&match=all";
     const botEntry = bots!.Result[index]!;
-    const rowAvatarHash =
-      botEntry.AvatarHash === null ? "fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb" : botEntry.AvatarHash;
+    const rowAvatarHash = defaultBotAvatarHash(botEntry.AvatarHash);
     const rowNickname = sanitizeNickname(botEntry.Nickname);
     let rowTemplate = renderRow({
       index,
@@ -577,60 +579,123 @@ declare const unsafeWindow: any;
   }
 
   function storeMatches(steamID: string, itemsToSend: MatchItem[], itemsToReceive: MatchItem[]): void {
+    // Materialize the shared card-name table BEFORE resolving ids: on a fresh
+    // scan tradeParams has no cardNames yet, and buildMatchStore would receive
+    // undefined and throw, leaving matches unpersisted (empty trade offers).
+    tradeParams.cardNames = Array.from(cardNames);
     const partner = getPartner(steamID);
-    tradeParams.matches[partner] = buildMatchStore(itemsToSend, itemsToReceive, tradeParams.cardNames!);
+    tradeParams.matches[partner] = buildMatchStore(itemsToSend, itemsToReceive, tradeParams.cardNames);
+    // buildMatchStore appends unknown hashes to the array; sync the Set back
+    // so the trailing SaveParams (and later ones in addMatchRow) persist them.
+    cardNames = new Set(tradeParams.cardNames);
     SaveParams();
   }
 
-  // Badge details are fetched with bounded concurrency: up to
-  // BADGE_DETAIL_CONCURRENCY ajaxgetbadgeinfo requests are in flight at once
-  // and each next launch is separated by the web limiter, keeping the
-  // per-request rate-limit friendliness of the serial scan while making the
-  // detail stage several times faster on badge-heavy accounts. Invalid badges
-  // are marked during the crawl and filtered once every badge has settled, so
-  // concurrent workers never reorder myBadges under each other.
-  const BADGE_DETAIL_CONCURRENCY = 6;
-
+  // Badge card data resolution: covered games (card list in the bundled
+  // dataset or the browser card cache) derive their slots locally with zero
+  // badge-detail requests; the rest are fetched serially - one
+  // ajaxgetbadgeinfo request at a time, separated by the web limiter - and
+  // learned into the browser cache. Parallel Steam requests are never made.
   function GetOwnCards(): void {
     debugPrint("GetOwnCards");
-    progressRadials.badges.steps = myBadges.length;
-    let nextIndex = 0;
-    let settledBadges = 0;
+
+    // Scan state declared first: finish() reads `aborted`, and the
+    // zero-pending fast path below returns via finish() before Phase 2.
+    let pendingIndex = 0;
     let aborted = false;
-    const invalidBadges = new Set<number>();
-    const attempts = Array.from({ length: myBadges.length }, () => 0);
+
+    // Phase 1: derive every badge whose card list is already known.
+    const pending: Array<{ appId: number; badge: Badge }> = [];
+    for (const badge of myBadges) {
+      const cardList = resolveBadgeCardList(badge.appId);
+      if (cardList === undefined) {
+        pending.push({ appId: badge.appId, badge });
+        continue;
+      }
+      const derived = buildBadgeFromCardList(
+        badge.appId,
+        resolveBadgeTitle(badge.appId),
+        resolveBadgeSize(badge.appId) ?? cardList.length,
+        cardList,
+        inventoryCardCounts!,
+      );
+      if (derived === undefined) {
+        // Data problem (size below five, or a card list disagreeing with the
+        // set size): fetch the badge authoritatively instead of dropping it.
+        pending.push({ appId: badge.appId, badge });
+        continue;
+      }
+      Object.assign(badge, derived);
+      for (const card of derived.cards) {
+        cardNames.add(card.hash);
+      }
+    }
+    progressRadials.badges.steps = pending.length;
+    if (pending.length === 0) {
+      finish();
+      return;
+    }
+
+    // Phase 2: serial detail fetch - one request at a time, web-limiter paced.
 
     function fillCards(
-      index: number,
+      badge: Badge,
       rgCards: Array<{ title: string; markethash: string; owned: number; imgurl: string }>,
     ): void {
-      myBadges[index]!.maxCards = rgCards.length;
+      badge.maxCards = rgCards.length;
+      const perApp = inventoryCardCounts?.[badge.appId];
       for (let i = 0; i < rgCards.length; i++) {
+        const card = rgCards[i]!;
         // Owned copies drive set progress and requests; the inventory counting
         // pass caps what this slot may offer. A game missing from the counting
         // pass leaves tradability unknown, and the matcher then treats every
         // copy as tradable.
-        const card = rgCards[i]!;
-        const perApp = inventoryCardCounts?.[myBadges[index]!.appId];
-        const markethash = card.markethash;
         const newcard: MatchCard = {
           item: card.title,
-          hash: markethash,
+          hash: card.markethash,
           count: card.owned,
           iconUrl: card.imgurl,
           number: i,
         };
         if (perApp !== undefined) {
-          newcard.tradableCount = perApp[markethash]?.tradable ?? 0;
+          newcard.tradableCount = perApp[card.markethash]?.tradable ?? 0;
         }
         debugPrint(JSON.stringify(newcard));
-        myBadges[index]!.cards.push(newcard);
-        cardNames.add(markethash);
+        badge.cards.push(newcard);
+        cardNames.add(card.markethash);
       }
     }
 
-    function fetchBadgeDetail(index: number): void {
-      let url = "https://steamcommunity.com/" + myProfileLink + "/ajaxgetbadgeinfo/" + myBadges[index]!.appId;
+    function learnBadgeCards(badge: Badge): void {
+      // A game's card list is static: persist it so later scans skip this
+      // badge-detail request entirely.
+      writeBadgeCardCacheEntry(localStorage, badgeCardCache, badge.appId, {
+        size: badge.maxCards,
+        cards: badge.cards.map((card) => ({ hash: card.hash, title: card.item, iconUrl: card.iconUrl })),
+      });
+    }
+
+    function fetchNext(): void {
+      if (aborted) {
+        return;
+      }
+      if (stop) {
+        stopEventCleanup("User interrupt");
+        return;
+      }
+      // Circuit breaker gate: while Steam is rate-limiting, fail fast with a
+      // retryable cooldown error instead of hammering the endpoint.
+      const detailGate = scanBreaker.check();
+      if (!detailGate.allowed) {
+        const failFast = buildRateLimitFailFastError(detailGate.remainingMs);
+        debugPrint(failFast.message);
+        stopEventCleanup(failFast.message);
+        aborted = true;
+        return;
+      }
+      updateProgress("badges");
+      const entry = pending[pendingIndex]!;
+      let url = "https://steamcommunity.com/" + myProfileLink + "/ajaxgetbadgeinfo/" + entry.appId + "?l=english";
       let xhr = new XMLHttpRequest();
       xhr.open("GET", url, true);
       xhr.responseType = "json";
@@ -638,38 +703,58 @@ declare const unsafeWindow: any;
       xhr.onload = function () {
         if (stop) {
           stopEventCleanup("User interrupt");
-          aborted = true;
           return;
         }
         let status = xhr.status;
         if (status === 200) {
+          scanBreaker.recordSuccess();
+        } else if (classifySteamError(status, null) === "RateLimited") {
+          // Rate-limit window: record the failure and surface the cooldown
+          // instead of hammering the endpoint with retries.
+          scanBreaker.recordRateLimited();
+          const cooldownGate = scanBreaker.check();
+          const failFast = buildRateLimitFailFastError(cooldownGate.remainingMs);
+          debugPrint(failFast.message);
+          stopEventCleanup(failFast.message);
+          aborted = true;
+          return;
+        } else if (status === 401 || status === 403) {
+          stopEventCleanup(`Badge data fetch error: ${entry.appId}`);
+          aborted = true;
+          return;
+        }
+        if (status === 200) {
           try {
             if (Object.keys(xhr.response).length === 1) {
-              // invalid badge: mark it; filtered once all badges have settled
-              debugPrint(`invalid badge ${myBadges[index]!.appId}`);
-              errors = 0;
-              invalidBadges.add(index);
-              settle();
+              // invalid badge: drop it and move on
+              debugPrint(`invalid badge ${entry.appId}`);
+              const index = myBadges.indexOf(entry.badge);
+              if (index !== -1) {
+                myBadges.splice(index, 1);
+              }
+              pendingIndex++;
+              setTimeout(fetchNext, globalSettings.weblimiter);
               return;
             }
-            debugPrint("processing badge " + myBadges[index]!.appId);
+            debugPrint("processing badge " + entry.appId);
             if (xhr.response != undefined && xhr.response.eresult == 1) {
               if (xhr.response.badgedata.rgCards.length >= 5) {
                 errors = 0;
-                fillCards(index, xhr.response.badgedata.rgCards);
-                settle();
+                fillCards(entry.badge, xhr.response.badgedata.rgCards);
+                learnBadgeCards(entry.badge);
+                pendingIndex++;
+                setTimeout(fetchNext, globalSettings.weblimiter);
                 return;
               } else {
                 debugPrint("less than 5 cards in a badge - something is wrong");
                 debugPrint(JSON.stringify(xhr.response));
                 errors++;
-                attempts[index] = (attempts[index] ?? 0) + 1;
               }
             } else {
               if (xhr.response != undefined) {
                 debugPrint("eresult = " + xhr.response.eresult);
               }
-              stopEventCleanup(`Badge data fetch error: ${myBadges[index]!.appId}`);
+              stopEventCleanup(`Badge data fetch error: ${entry.appId}`);
               aborted = true;
               return;
             }
@@ -677,21 +762,14 @@ declare const unsafeWindow: any;
             debugPrint(error);
             debugPrint(JSON.stringify(xhr.response));
             errors++;
-            attempts[index] = (attempts[index] ?? 0) + 1;
           }
         } else {
           errors++;
-          attempts[index] = (attempts[index] ?? 0) + 1;
         }
-        const attemptCount = attempts[index] ?? 0;
-        if (
-          (status < 400 || status >= 500) &&
-          attemptCount <= globalSettings.maxErrors &&
-          errors <= globalSettings.maxErrors * BADGE_DETAIL_CONCURRENCY
-        ) {
+        if ((status < 400 || status >= 500) && errors <= globalSettings.maxErrors) {
           setTimeout(
             function () {
-              fetchBadgeDetail(index);
+              fetchNext();
             },
             retryDelay(globalSettings, errors),
           );
@@ -699,7 +777,7 @@ declare const unsafeWindow: any;
           if (status !== 200) {
             debugPrint(`Error getting badge data: ${status}`);
           } else {
-            debugPrint("Error getting own badge data, wrong badge " + myBadges[index]!.appId);
+            debugPrint("Error getting own badge data, wrong badge " + entry.appId);
           }
           stopEventCleanup(`Error getting badge data: ${status}`);
           aborted = true;
@@ -709,16 +787,13 @@ declare const unsafeWindow: any;
       xhr.onerror = function () {
         if (stop) {
           stopEventCleanup("User interrupt");
-          aborted = true;
           return;
         }
         errors++;
-        attempts[index] = (attempts[index] ?? 0) + 1;
-        const attemptCount = attempts[index] ?? 0;
-        if (attemptCount <= globalSettings.maxErrors) {
+        if (errors <= globalSettings.maxErrors) {
           setTimeout(
             function () {
-              fetchBadgeDetail(index);
+              fetchNext();
             },
             retryDelay(globalSettings, errors),
           );
@@ -732,60 +807,24 @@ declare const unsafeWindow: any;
       xhr.send();
     }
 
-    function settle(): void {
-      settledBadges++;
-      updateProgress("badges");
-      if (settledBadges >= myBadges.length) {
-        finish();
-        return;
-      }
-      setTimeout(launch, globalSettings.weblimiter);
-    }
-
-    function launch(): void {
-      if (aborted || stop) {
-        if (stop) {
-          stopEventCleanup("User interrupt");
-        }
-        return;
-      }
-      if (nextIndex >= myBadges.length) {
-        return; // cursor exhausted; remaining workers drain
-      }
-      fetchBadgeDetail(nextIndex);
-      nextIndex++;
-    }
-
     function finish(): void {
       if (aborted) {
         return;
       }
       debugPrint("populated");
 
-      /* Filter invalid badges (marked during the crawl). */
-      for (let i = myBadges.length - 1; i >= 0; i--) {
-        if (invalidBadges.has(i)) {
-          myBadges.splice(i, 1);
-        }
-      }
-
       debugTime("Filter and sort");
       for (let i = myBadges.length - 1; i >= 0; i--) {
         debugPrint("badge " + i + JSON.stringify(myBadges[i]!));
 
-        myBadges[i]!.cards.sort((a, b) => b.count - a.count);
-        if (myBadges[i]!.cards[0]!.count - myBadges[i]!.cards[myBadges[i]!.cards.length - 1]!.count < 2) {
+        sortBadgeCardsDesc(myBadges[i]!);
+        if (!hasMatchableDistribution(myBadges[i]!)) {
           //nothing to match, remove from list.
           myBadges.splice(i, 1);
           continue;
         }
 
-        let totalCards = 0;
-        for (let j = 0; j < myBadges[i]!.maxCards; j++) {
-          totalCards += myBadges[i]!.cards[j]!.count;
-        }
-        myBadges[i]!.maxSets = Math.floor(totalCards / myBadges[i]!.maxCards);
-        myBadges[i]!.lastSet = Math.ceil(totalCards / myBadges[i]!.maxCards);
+        const totalCards = applyBadgeSetSizes(myBadges[i]!);
         debugPrint(
           "totalCards=" + totalCards + " maxSets=" + myBadges[i]!.maxSets + " lastSet=" + myBadges[i]!.lastSet,
         );
@@ -827,13 +866,7 @@ declare const unsafeWindow: any;
       GetCards(0, 0);
     }
 
-    if (myBadges.length === 0) {
-      finish();
-      return;
-    }
-    for (let i = 0; i < BADGE_DETAIL_CONCURRENCY && i < myBadges.length; i++) {
-      launch();
-    }
+    fetchNext();
   }
 
   function GetCards(index: number, userindex: number, idLink?: string): void {
@@ -889,7 +922,7 @@ declare const unsafeWindow: any;
         : `profiles/${bots!.Result[userindex]!.SteamID}`;
       updateProgress("botBadges");
 
-      let url = `https://steamcommunity.com/${idLink ?? profileLink}/gamecards/${botBadges[index]!.appId}`;
+      let url = `https://steamcommunity.com/${idLink ?? profileLink}/gamecards/${botBadges[index]!.appId}?l=english`;
       let xhr = new XMLHttpRequest();
       xhr.open("GET", url, true);
       xhr.responseType = "document";
@@ -900,6 +933,9 @@ declare const unsafeWindow: any;
           return;
         }
         let status = xhr.status;
+        if (status === 200) {
+          scanBreaker.recordSuccess();
+        }
         if (status === 200) {
           debugPrint("processing badge " + botBadges[index]!.appId);
           if (null === xhr.response.documentElement.querySelector(".badge_card_set_cards")) {
@@ -924,32 +960,33 @@ declare const unsafeWindow: any;
             );
             return;
           }
-          let badgeCards = xhr.response.documentElement.querySelectorAll(".badge_card_set_card");
-          if (badgeCards.length >= 5) {
+          const parseResult = parseGamecardsPage(xhr.response.documentElement, myBadges[index]!.cards);
+          if (parseResult.kind !== "too-few") {
             errors = 0;
-            botBadges[index]!.maxCards = badgeCards.length;
-            for (let i = 0; i < badgeCards.length; i++) {
-              let quantityElement = badgeCards[i].querySelector(".badge_card_set_text_qty");
-              let quantity = quantityElement === null ? "(0)" : (quantityElement as HTMLElement).innerText.trim();
-              quantity = quantity.slice(1, -1);
-              let name = "";
-              badgeCards[i].querySelector(".badge_card_set_title")!.childNodes.forEach(function (element: ChildNode) {
-                if (element.nodeType === Node.TEXT_NODE) {
-                  name = name + element.textContent;
-                }
-              });
-              name = name.trim();
-              let markethash = myBadges[index]!.cards.find((card) => card.number === i)!.hash;
-              let icon = (badgeCards[i].querySelector(".gamecard") as HTMLImageElement).src.trim();
-              let newcard = {
-                item: name,
-                hash: markethash,
-                count: Number(quantity),
-                iconUrl: icon,
-                number: i,
-              };
-              debugPrint(JSON.stringify(newcard));
-              botBadges[index]!.cards.push(newcard);
+            if (parseResult.kind === "ok") {
+              botBadges[index]!.maxCards = parseResult.maxCards;
+              for (const parsed of parseResult.cards) {
+                debugPrint(JSON.stringify(parsed));
+                botBadges[index]!.cards.push(parsed);
+              }
+            }
+            if (parseResult.kind === "unmatched") {
+              debugPrint(
+                `Card "${parseResult.unmatched}" not found in badge ${botBadges[index]!.appId}, skipping badge for this partner`,
+              );
+              botBadges.splice(index, 1);
+              myBadges.splice(index, 1);
+              progressRadials.botBadges.currentStep--;
+              idLink ??= xhr.responseURL.match(/(id\/.+?)\//)?.[1];
+              setTimeout(
+                (function (index, userindex, idLink) {
+                  return function () {
+                    GetCards(index, userindex, idLink);
+                  };
+                })(index, userindex, idLink),
+                globalSettings.weblimiter,
+              );
+              return;
             }
 
             idLink ??= xhr.responseURL.match(/(id\/.+?)\//)?.[1];
@@ -972,6 +1009,16 @@ declare const unsafeWindow: any;
             errors++;
           }
         } else {
+          if (classifySteamError(status, null) === "RateLimited") {
+            // Rate-limit window: record the failure and surface the cooldown
+            // instead of hammering the endpoint with retries.
+            scanBreaker.recordRateLimited();
+            const cooldownGate = scanBreaker.check();
+            const failFast = buildRateLimitFailFastError(cooldownGate.remainingMs);
+            debugPrint(failFast.message);
+            stopEventCleanup(failFast.message);
+            return;
+          }
           errors++;
         }
         if ((status < 400 || status >= 500) && errors <= globalSettings.maxErrors) {
@@ -1024,6 +1071,15 @@ declare const unsafeWindow: any;
           return;
         }
       };
+      // Circuit breaker gate: while Steam is rate-limiting, fail fast with a
+      // retryable cooldown error instead of hammering the endpoint.
+      const botGate = scanBreaker.check();
+      if (!botGate.allowed) {
+        const failFast = buildRateLimitFailFastError(botGate.remainingMs);
+        debugPrint(failFast.message);
+        stopEventCleanup(failFast.message);
+        return;
+      }
       xhr.send();
       return; //do this synchronously to avoid rate limit
     }
@@ -1033,13 +1089,8 @@ declare const unsafeWindow: any;
     for (let i = botBadges.length - 1; i >= 0; i--) {
       debugPrint("badge " + i + JSON.stringify(botBadges[i]!));
 
-      botBadges[i]!.cards.sort((a, b) => b.count - a.count);
-      let totalCards = 0;
-      for (let j = 0; j < botBadges[i]!.maxCards; j++) {
-        totalCards += botBadges[i]!.cards[j]!.count;
-      }
-      botBadges[i]!.maxSets = Math.floor(totalCards / botBadges[i]!.maxCards);
-      botBadges[i]!.lastSet = Math.ceil(totalCards / botBadges[i]!.maxCards);
+      sortBadgeCardsDesc(botBadges[i]!);
+      const totalCards = applyBadgeSetSizes(botBadges[i]!);
       debugPrint(
         "totalCards=" + totalCards + " maxSets=" + botBadges[i]!.maxSets + " lastSet=" + botBadges[i]!.lastSet,
       );
@@ -1114,15 +1165,56 @@ declare const unsafeWindow: any;
         await sleep(globalSettings.inventoryScanDelay);
       }
 
-      const url: string = startAssetId ? `${baseUrl}&start_assetid=${startAssetId}` : baseUrl;
-
-      const response: Response = await fetch(url);
-
-      if (!response.ok) {
-        throw new Error(`HTTP Error ${response.status}`);
+      // Rate-limit circuit breaker: an open breaker fails fast with a
+      // retryable error instead of hammering a throttled endpoint.
+      const gate = scanBreaker.check();
+      if (!gate.allowed) {
+        throw buildRateLimitFailFastError(gate.remainingMs);
       }
 
-      const data: any = await response.json();
+      const url: string = startAssetId ? `${baseUrl}&start_assetid=${startAssetId}` : baseUrl;
+
+      let data: any;
+      let pageError: Error | null = null;
+      let pageCategory: SteamErrorCategory = "Unknown";
+      try {
+        const response: Response = await fetch(url);
+        if (!response.ok) {
+          const bodyText = await response.text().catch(() => null);
+          pageCategory = classifySteamError(response.status, bodyText);
+          pageError = new Error(`HTTP Error ${response.status}`);
+        } else {
+          try {
+            data = await response.json();
+            scanBreaker.recordSuccess();
+          } catch {
+            pageCategory = "Unknown";
+            pageError = new Error("Inventory response was not valid JSON");
+          }
+        }
+      } catch (error) {
+        // Network-level failure (fetch rejection): transport errors are
+        // transient by definition.
+        pageCategory = "Transient";
+        pageError = error instanceof Error ? error : new Error(String(error));
+      }
+
+      if (pageError !== null) {
+        if (pageCategory === "RateLimited") {
+          scanBreaker.recordRateLimited();
+        }
+        if (pageCategory === "Auth" || pageCategory === "Unknown") {
+          throw pageError;
+        }
+        // Rate-limited and transient page failures retry within the error
+        // budget; a fresh breaker gate re-checks before the next attempt.
+        errors++;
+        if (errors > globalSettings.maxErrors) {
+          throw pageError;
+        }
+        await sleep(retryDelay(globalSettings, errors));
+        continue;
+      }
 
       // Validate each entry before it can influence counting: malformed
       // entries are skipped, unknown Steam fields are ignored.
@@ -1188,33 +1280,97 @@ declare const unsafeWindow: any;
        src/lib/settings.js and are inlined here by script/build.py. */
   // Settings helpers arrive via the ./lib/settings import at the top of this file.
 
+  // Per-game badge data resolution: single bundled dataset -> browser
+  // cache -> the lazily fetched remote badges database.
+  function resolveBadgeSize(appId: number): number | undefined {
+    return (
+      cardDataset[String(appId)]?.size ?? badgeCardCache[String(appId)]?.size ?? remoteBadgeCardData?.[appId]?.size
+    );
+  }
+
+  function resolveBadgeTitle(appId: number): string {
+    return (
+      cardDataset[String(appId)]?.name ??
+      remoteBadgeCardData?.[appId]?.name ??
+      badgeCardCache[String(appId)]?.name ??
+      `AppID ${appId}`
+    );
+  }
+
+  function resolveBadgeCardList(appId: number): Array<{ hash: string; title?: string; iconUrl?: string }> | undefined {
+    // The bundled dataset carries full card objects (hash + title + iconUrl)
+    // for rich entries and hashes only for folded-in counts entries, and is
+    // returned verbatim. The badge title has no bundled source (the file
+    // carries card titles, not badge names), so `resolveBadgeTitle` keeps its
+    // existing order.
+    return cardDataset[String(appId)]?.cards ?? badgeCardCache[String(appId)]?.cards;
+  }
+
+  // Badge-card data (size + title) resolved from the single bundled dataset,
+  // the browser cache, and the lazily fetched remote badges database.
+  function resolvedBadgeCardData(): Record<string, BadgeCardInfo> {
+    const resolved: Record<string, BadgeCardInfo> = {};
+    for (const [appId, entry] of Object.entries(cardDataset)) {
+      resolved[appId] = { size: entry.size, name: entry.name ?? `AppID ${appId}` };
+    }
+    for (const [appId, entry] of Object.entries(badgeCardCache)) {
+      if (resolved[appId] === undefined && entry.size !== undefined) {
+        resolved[appId] = { size: entry.size, name: entry.name ?? `AppID ${appId}` };
+      }
+    }
+    if (remoteBadgeCardData !== null) {
+      for (const [appId, info] of Object.entries(remoteBadgeCardData)) {
+        if (resolved[appId] === undefined) {
+          resolved[appId] = info;
+        }
+      }
+    }
+    return resolved;
+  }
+
   async function getBadgesInventory(inventoryData: InventoryData, runId: number, scanPlan: ScanPlan): Promise<void> {
     inventoryCardCounts = buildInventoryCardCounts(inventoryData);
+
+    // Candidate games: every game with counted cards, plus scan-filter games.
+    const candidateAppIds = new Set<number>();
+    for (const appId of Object.keys(inventoryCardCounts)) {
+      candidateAppIds.add(Number(appId));
+    }
+    if (scanPlan.mode === "filters") {
+      for (const filter of globalSettings.scanFilters) {
+        if (filter.active) {
+          candidateAppIds.add(Number(filter.appId));
+        }
+      }
+    }
+
+    // Set sizes resolve from the bundled dataset and the browser cache first;
+    // the remote badges database is fetched lazily, once, only if something
+    // is still unknown.
+    const needsDatabase = [...candidateAppIds].some((appId) => resolveBadgeSize(appId) === undefined);
+    if (needsDatabase) {
+      const request = resolveRequestFunction({ legacyRequest: GM_xmlhttpRequest, modernApi: GM });
+      const text = await gmGet(request, {
+        url: "https://raw.githubusercontent.com/nolddor/steam-badges-db/main/data/badges.min.json",
+      });
+      remoteBadgeCardData = JSON.parse(text) as Record<string, BadgeCardInfo>;
+      if (runId !== undefined && (runId !== scanRunId || stop)) {
+        return; // superseded by a newer scan run
+      }
+    }
 
     if (processFilters(scanPlan)) {
       return;
     }
 
-    const fetchJSON = async (url: string): Promise<unknown> => {
-      const request = resolveRequestFunction({ legacyRequest: GM_xmlhttpRequest, modernApi: GM });
-      const text = await gmGet(request, { url });
-      return JSON.parse(text);
-    };
-    const badgeCardData = (await fetchJSON(
-      "https://raw.githubusercontent.com/nolddor/steam-badges-db/main/data/badges.min.json",
-    )) as Record<string, BadgeCardInfo>;
-    if (runId !== undefined && (runId !== scanRunId || stop)) {
-      return; // superseded by a newer scan run
-    }
-
-    const scanResult = buildScanEligibility(inventoryCardCounts, badgeCardData);
+    const scanResult = buildScanEligibility(inventoryCardCounts, resolvedBadgeCardData());
 
     /* Push badge stub to myBadges list */
-    for (let appId of Object.keys(scanResult)) {
-      if (scanResult[appId]!.unbalanced) {
+    for (const appId of candidateAppIds) {
+      if (scanResult[String(appId)]!.unbalanced) {
         myBadges.push({
-          appId: Number(appId),
-          title: badgeCardData[appId]!.name!,
+          appId,
+          title: resolveBadgeTitle(appId),
           maxCards: 0,
           maxSets: 0,
           lastSet: 0,
@@ -1455,6 +1611,9 @@ declare const unsafeWindow: any;
     const runId = scanRunId;
     myBadges.length = 0;
     cardNames = new Set();
+    cardDataset = normalizeDataset(badgeCardsJson);
+    badgeCardCache = readBadgeCardCache(localStorage);
+    remoteBadgeCardData = null;
     tradeParams = {
       matches: {},
       filter: [],
@@ -1762,16 +1921,6 @@ declare const unsafeWindow: any;
     // The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
     // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-    function getRandomInt(min: number, max: number): number {
-      "use strict";
-      return Math.floor(Math.random() * (max - min)) + min;
-    }
-
-    function mySort(a: { id: string }, b: { id: string }): number {
-      "use strict";
-      return parseInt(b.id) - parseInt(a.id);
-    }
-
     ///// Steam functions /////
 
     function restoreCookie(oldCookie: string | undefined): void {
@@ -1788,61 +1937,18 @@ declare const unsafeWindow: any;
 
     function addCards(g_s: any, g_v: any): void {
       "use strict";
-      let tmpCards: Record<string, Array<{ type: string; element: unknown; id: string }>>;
-      let inv: any;
-      let index: number;
-      let currentCards: Array<{ type: string; element: unknown; id: string }>;
-      let failLater = false;
-      let cardTypes: string[][] = [[], []];
-      g_v.Cards.forEach(function (requestedCards: string[], i: number) {
-        tmpCards = {};
-        inv = g_v.Users[i].rgContexts[753][6].inventory;
-        inv.BuildInventoryDisplayElements();
-        inv = inv.rgInventory;
-        Object.keys(inv).forEach(function (item: string) {
-          // add all matching cards to temporary dict
-          index = requestedCards.findIndex((elem: string) => elem == inv[item].market_hash_name);
-          if (index > -1) {
-            // Skip copies Steam would omit from the trade: trade-held
-            // cards and cards with a future "Tradable After" date.
-            // When every copy is held, the request falls through to
-            // the existing missing-items abort below.
-            if (!isTradeOfferItemTradable(inv[item])) {
-              return;
-            }
-            if (tmpCards[requestedCards[index]!] === undefined) {
-              tmpCards[requestedCards[index]!] = [];
-            }
-            tmpCards[requestedCards[index]!]!.push({
-              type: inv[item].type,
-              element: inv[item].element,
-              id: inv[item].id,
-            });
-          }
-        });
-        if (g_s.order === "SORT") {
-          // sort cards descending by card id for each type
-          Object.keys(tmpCards).forEach(function (id: string) {
-            tmpCards[id]!.sort(mySort);
-          });
-        }
-        // add cards to trade in order given by STM
-        requestedCards.forEach(function (elem: string) {
-          currentCards = tmpCards[elem] || []; // all cards from inventory with requested signature
-          if (currentCards!.length === 0) {
-            failLater = true;
-          } else {
-            index = 0;
-            if (g_s.order === "RANDOM") {
-              // randomize index
-              index = getRandomInt(0, currentCards!.length);
-            }
-            unsafeWindow.MoveItemToTrade(currentCards![index]!.element);
-            cardTypes[i]!.push(currentCards![index]!.type);
-            currentCards!.splice(index, 1);
-          }
+      const pools = [0, 1].map((i: number) => {
+        const live = g_v.Users[i].rgContexts[753][6].inventory;
+        live.BuildInventoryDisplayElements();
+        return Object.values(live.rgInventory) as OfferPoolItem[];
+      });
+      const plan = planOfferSelection(g_v.Cards, pools, g_s.order, getRandomOfferIndex);
+      plan.moves.forEach(function (sideMoves) {
+        sideMoves.forEach(function (move) {
+          unsafeWindow.MoveItemToTrade(move.element);
         });
       });
+      const failLater = plan.failLater;
 
       if (
         failLater ||
@@ -1857,15 +1963,10 @@ declare const unsafeWindow: any;
       }
 
       // check if item types match
-      cardTypes[1]!.forEach(function (type: string) {
-        index = cardTypes[0]!.indexOf(type);
-        if (index > -1) {
-          cardTypes[0]!.splice(index, 1);
-        } else {
-          unsafeWindow.ShowAlertDialog("Not 1:1 trade", "This is not a valid 1:1 trade. Script aborting.");
-          throw "Not 1:1 trade";
-        }
-      });
+      if (!isOneToOneTrade(plan.cardTypes)) {
+        unsafeWindow.ShowAlertDialog("Not 1:1 trade", "This is not a valid 1:1 trade. Script aborting.");
+        throw "Not 1:1 trade";
+      }
       restoreCookie(g_v.oldCookie);
       // inject some JS to do something after trade offer is sent
       if (g_s.doAfterTrade !== "NOTHING") {
@@ -1925,6 +2026,19 @@ declare const unsafeWindow: any;
           // no matter what happens, restore old cookie
           restoreCookie(g_v.oldCookie);
           debugPrint(e);
+          // Loud failure: the handoff resolved but items could not be
+          // selected (e.g. inventory not matching). Never fail silently.
+          try {
+            const message = e instanceof Error ? e.message : String(e);
+            unsafeWindow.ShowAlertDialog(
+              "ASF-STM trade setup failed",
+              "Could not add the matched cards to the trade offer: " +
+                message +
+                ". Open DevTools console and check localStorage key TempAsfStm.ASF.STM.Params (matches/filter/cardNames).",
+            );
+          } catch {
+            /* dialogs unavailable - debug log above is the fallback */
+          }
         }
       } else {
         window.setTimeout(checkContexts, 500, g_s, g_v);
@@ -1951,44 +2065,24 @@ declare const unsafeWindow: any;
 
         let vars = getUrlVars();
 
-        if (vars.match === undefined) {
-          throw new Error("missing url parameter");
-        }
-        let filter: number[] = [];
-        if (vars.match === "all") {
-          filter = params.filter;
-        } else {
-          // NB: the original compared against NaN here, which is
-          // never true; preserved verbatim (no behavior change).
-          // eslint-disable-next-line no-constant-condition
-          if (false) {
-            throw new Error("invalid url parameter");
-          }
-          filter.push(Number(vars.match));
-        }
-
-        let Cards: string[][] = [[], []];
-        let matches = params.matches[vars.partner as string];
-        if (matches === undefined) {
+        // Handoff resolution lives in lib/matcher-core (pure, fixture-tested):
+        // match=all selects the persisted filter, match=<appid> one badge;
+        // partner accepts raw, truncated, and twice-truncated keys.
+        const partnerKey = vars.partner as string;
+        debugPrint("trade partner keys tried: " + JSON.stringify(tradePartnerKeyCandidates(partnerKey, getPartner)));
+        const filter = resolveTradeFilter(vars.match, params.filter);
+        debugPrint("trade appid filter: " + JSON.stringify(filter));
+        let matches: Record<string, StoredMatchCards>;
+        try {
+          matches = resolvePartnerMatches(params.matches, partnerKey, getPartner);
+        } catch {
           throw new Error("no matches with this partner");
         }
         debugPrint(JSON.stringify(matches));
-        for (let i = 0; i < filter.length; i++) {
-          const appid = filter[i]!;
-
-          if (matches[appid] === undefined) {
-            //can happen, filter is just allowed appids, not necessaryly available on this bot.
-            debugPrint("no such appid in matches: " + appid);
-          } else {
-            debugPrint("adding matches for appid: " + appid);
-            Cards[0]! = Cards[0]!.concat(
-              matches[appid]!.send.map((card: number) => decodeURIComponent(params.cardNames[card]!)),
-            );
-            Cards[1]! = Cards[1]!.concat(
-              matches[appid]!.receive.map((card: number) => decodeURIComponent(params.cardNames[card]!)),
-            );
-          }
-        }
+        const onSkipCard = (card: number): void => {
+          debugPrint("skipping unknown card id: " + card);
+        };
+        let Cards: string[][] = resolveTradeCards(matches, filter, params.cardNames, onSkipCard);
         debugPrint(JSON.stringify(Cards));
 
         if (Cards[0]!.length !== Cards[1]!.length) {
@@ -2018,6 +2112,17 @@ declare const unsafeWindow: any;
       }
     } catch (e) {
       debugPrint(e);
+      try {
+        const message = e instanceof Error ? e.message : String(e);
+        unsafeWindow.ShowAlertDialog(
+          "ASF-STM trade setup failed",
+          "Could not prepare the trade offer: " +
+            message +
+            ". Open DevTools console and check localStorage key TempAsfStm.ASF.STM.Params (matches/filter/cardNames).",
+        );
+      } catch {
+        /* dialogs unavailable - debug log above is the fallback */
+      }
     }
   }
 })();

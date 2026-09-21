@@ -183,14 +183,21 @@ export function computeMatches(
 
 /**
  * Resolves every accumulated card hash to its index in the shared card-name
- * table. Missing hashes stay `-1`, exactly as the original `indexOf` did.
+ * table. Hashes missing from the table are appended so no `-1` id is ever
+ * persisted (a `-1` would make `decodeURIComponent(cardNames[-1])` throw on
+ * the trade page and abort the offer with nothing selected).
  */
 export function resolveCardIds(items: MatchItem[], cardNames: string[]): number[] {
   const ids: number[] = [];
   for (let i = 0; i < items.length; i++) {
     for (let c = 0; c < items[i]!.cards.length; c++) {
       for (let a = 0; a < items[i]!.cards[c]!.count; a++) {
-        ids.push(cardNames.indexOf(items[i]!.cards[c]!.hash));
+        const hash = items[i]!.cards[c]!.hash;
+        let id = cardNames.indexOf(hash);
+        if (id === -1) {
+          id = cardNames.push(hash) - 1;
+        }
+        ids.push(id);
       }
     }
   }
@@ -206,8 +213,7 @@ export interface StoredMatchCards {
 /**
  * Builds the persisted per-partner match map from the two trade sides.
  * Throws when the sides disagree, matching the original behavior.
- */
-export function buildMatchStore(
+ */ export function buildMatchStore(
   itemsToSend: MatchItem[],
   itemsToReceive: MatchItem[],
   cardNames: string[],
@@ -232,4 +238,135 @@ export function buildMatchStore(
   }
 
   return partnerMatches;
+}
+
+// ---------------------------------------------------------------------------
+// Trade-offer page handoff (openspec change fix-tradeoffer-empty-selection).
+//
+// Pure counterparts of the trade-page block in `src/ASF-STM.ts`: resolving the
+// `partner`/`match` URL params against the persisted scan params into the two
+// card-name lists the offer page selects. Extracted so the contract is
+// fixture-testable; the userscript calls these and only handles DOM/dialogs.
+// ---------------------------------------------------------------------------
+
+/** Persisted scan params as the trade page needs them. */
+export interface TradePageStore {
+  matches: Record<string, Record<string, StoredMatchCards>>;
+  cardNames: string[];
+  filter: Array<string | number>;
+}
+
+/**
+ * Candidate storage keys for one `partner` URL value, most specific first:
+ * the raw value, its truncated account id, and the twice-truncated form (in
+ * case a stored key was truncated twice). The scan side keys matches by
+ * truncated id while bot-mode URLs carry the full SteamID and friend-mode
+ * URLs the truncated id, so the trade page must accept every form.
+ */
+export function tradePartnerKeyCandidates(partnerParam: string, truncate: (id: string) => string): string[] {
+  const candidates = [partnerParam];
+  const once = truncate(partnerParam);
+  if (!candidates.includes(once)) {
+    candidates.push(once);
+  }
+  const twice = truncate(once);
+  if (!candidates.includes(twice)) {
+    candidates.push(twice);
+  }
+  return candidates;
+}
+
+/** Finds the stored per-appid match map for one `partner` URL value. */
+export function resolvePartnerMatches(
+  matches: TradePageStore["matches"],
+  partnerParam: string,
+  truncate: (id: string) => string,
+): Record<string, StoredMatchCards> {
+  for (const key of tradePartnerKeyCandidates(partnerParam, truncate)) {
+    const entry = matches[key];
+    if (entry !== undefined) {
+      return entry;
+    }
+  }
+  throw new Error("no matches with this partner");
+}
+
+/**
+ * Resolves the `match` URL value to the appid filter: `"all"` selects the
+ * whole persisted filter, otherwise exactly the one numeric appid. Fixes the
+ * inherited dead check (`Number(x) === NaN`, never true) by rejecting
+ * non-numeric values as invalid.
+ */
+export function resolveTradeFilter(matchParam: string | undefined, filter: TradePageStore["filter"]): number[] {
+  if (matchParam === undefined) {
+    throw new Error("missing url parameter");
+  }
+  if (matchParam === "all") {
+    return filter.map((appId) => Number(appId));
+  }
+  const appId = Number(matchParam);
+  if (Number.isNaN(appId)) {
+    throw new Error("invalid url parameter");
+  }
+  return [appId];
+}
+
+/** Decodes one persisted card id to its market-hash name, skipping unknowns. */
+export function decodeStoredCardName(
+  cardNames: string[],
+  card: number,
+  onSkip?: (card: number) => void,
+): string | undefined {
+  const name = cardNames[card];
+  if (typeof name !== "string") {
+    onSkip?.(card);
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+}
+
+/**
+ * Builds the two card-name lists (ours, theirs) for the resolved appid
+ * filter. Appids in the filter without a match entry are skipped (the filter
+ * is the allowed set, not necessarily this partner's set). Throws when
+ * nothing resolves or when the sides are unbalanced, matching the trade-page
+ * abort messages.
+ */
+export function resolveTradeCards(
+  partnerMatches: Record<string, StoredMatchCards>,
+  appFilter: number[],
+  cardNames: string[],
+  onSkip?: (card: number) => void,
+): [string[], string[]] {
+  const send: string[] = [];
+  const receive: string[] = [];
+  for (const appId of appFilter) {
+    const entry = partnerMatches[appId];
+    if (entry === undefined) {
+      continue;
+    }
+    for (const card of entry.send) {
+      const name = decodeStoredCardName(cardNames, card, onSkip);
+      if (name !== undefined) {
+        send.push(name);
+      }
+    }
+    for (const card of entry.receive) {
+      const name = decodeStoredCardName(cardNames, card, onSkip);
+      if (name !== undefined) {
+        receive.push(name);
+      }
+    }
+  }
+  if (send.length !== receive.length) {
+    throw new Error("Different items amount on both sides");
+  }
+  if (send.length === 0) {
+    throw new Error("nothing to add, exiting");
+  }
+  return [send, receive];
 }

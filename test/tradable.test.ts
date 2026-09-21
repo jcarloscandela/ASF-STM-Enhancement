@@ -11,6 +11,7 @@ import { describe, it } from "vitest";
 import assert from "node:assert/strict";
 
 import {
+  buildBadgeFromCardList,
   buildInventoryCardCounts,
   buildScanEligibility,
   getTradableAfterTime,
@@ -18,11 +19,38 @@ import {
   isCurrentlyTradableDescription,
   isTradableDescription,
   isTradeOfferItemTradable,
+  type InventoryCardCounts,
   type InventoryCardData,
   type InventoryData,
   type SteamInventoryAsset,
   type SteamInventoryDescription,
 } from "../src/lib/tradable";
+import {
+  BUNDLED_ICON_URL_PREFIX,
+  normalizeDataset,
+  readBadgeCardCache,
+  resolveBadgeEntry,
+  writeBadgeCardCacheEntry,
+} from "../src/lib/dataset";
+import { computeMatches } from "../src/lib/matcher-core";
+import type { StorageLike } from "../src/lib/storage";
+
+function fakeStorage(seed: Record<string, string> = {}): StorageLike {
+  const map = new Map<string, string>(Object.entries(seed));
+  return {
+    getItem: (key) => (map.has(key) ? (map.get(key) as string) : null),
+    setItem: (key, value) => {
+      map.set(key, value);
+    },
+    removeItem: (key) => {
+      map.delete(key);
+    },
+  };
+}
+
+function cardEntry(owned: number, tradable: number): InventoryCardData {
+  return { owned, tradable };
+}
 
 function cardDescription(overrides: Partial<SteamInventoryDescription> = {}): SteamInventoryDescription {
   return {
@@ -344,5 +372,308 @@ describe("buildScanEligibility", () => {
   it("skips games absent from the badges database", () => {
     const result = buildScanEligibility({ 12345: cards({ A: [5, 5] }) }, db);
     assert.deepEqual(result, {});
+  });
+});
+
+describe("normalizeDataset", () => {
+  it("normalizes the counts-only export", () => {
+    const raw = [
+      { app_id: "1000010", card_count: "5" },
+      { app_id: 1000030, card_count: 8 },
+    ];
+    assert.deepEqual(normalizeDataset(raw), {
+      1000010: { size: 5 },
+      1000030: { size: 8 },
+    });
+  });
+
+  it("normalizes the counts record with string card lists", () => {
+    const raw = {
+      1000010: { size: 5, name: "Some Game", cards: ["Some Game - Card A", "Some Game - Card B"] },
+    };
+    assert.deepEqual(normalizeDataset(raw), {
+      1000010: {
+        size: 5,
+        name: "Some Game",
+        cards: [{ hash: "Some Game - Card A" }, { hash: "Some Game - Card B" }],
+      },
+    });
+  });
+
+  it("normalizes the badge-cards record with card objects", () => {
+    const raw = {
+      220: {
+        size: 8,
+        cards: [
+          { hash: "220-Alyx Vance", title: "Alyx Vance", iconUrl: "https://example.test/alyx" },
+          { hash: "220-G-Man" },
+        ],
+      },
+    };
+    assert.deepEqual(normalizeDataset(raw), {
+      220: {
+        size: 8,
+        cards: [
+          { hash: "220-Alyx Vance", title: "Alyx Vance", iconUrl: "https://example.test/alyx" },
+          { hash: "220-G-Man" },
+        ],
+      },
+    });
+  });
+
+  it("drops unusable cards and keeps size-only entries", () => {
+    const raw = {
+      221: { size: 6, cards: [{ hash: "" }, { title: "No hash" }, null, 42, { hash: "221-Kept", title: "Kept" }] },
+      222: { size: 7, cards: [{ hash: "" }, null] },
+    };
+    assert.deepEqual(normalizeDataset(raw), {
+      221: { size: 6, cards: [{ hash: "221-Kept", title: "Kept" }] },
+      222: { size: 7 },
+    });
+  });
+
+  it("ignores invalid entries and keeps the rest", () => {
+    const raw = [
+      { app_id: "1000010", card_count: "5" },
+      { app_id: "1000011", card_count: "0" },
+      { app_id: "1000012", card_count: "nope" },
+      { app_id: "1000013" },
+      "garbage",
+      null,
+    ];
+    assert.deepEqual(normalizeDataset(raw), { 1000010: { size: 5 } });
+  });
+
+  it("returns an empty dataset for corrupt input", () => {
+    for (const raw of [null, undefined, "corrupt", 42]) {
+      assert.deepEqual(normalizeDataset(raw), {});
+    }
+  });
+
+  it("decodes the compact encoding identically to the long-key shape", () => {
+    const fullIcon = `${BUNDLED_ICON_URL_PREFIX}suffix-bytes`;
+    const longhand = {
+      220: {
+        size: 8,
+        cards: [{ hash: "220-Alyx Vance", title: "Alyx Vance", iconUrl: fullIcon }, { hash: "220-G-Man" }],
+      },
+      1000010: { size: 5 },
+    };
+    const compact = {
+      220: { s: 8, c: [{ h: "220-Alyx Vance", t: "Alyx Vance", u: "suffix-bytes" }, { h: "220-G-Man" }] },
+      1000010: { s: 5 },
+    };
+    assert.deepEqual(normalizeDataset(compact), normalizeDataset(longhand));
+  });
+});
+
+describe("resolveBadgeEntry", () => {
+  it("merges dataset and cache with the dataset winning on conflicts", () => {
+    const dataset = normalizeDataset({ 753: { size: 5, name: "Bundled Name" } });
+    const cache = {
+      753: { size: 9, name: "Cache Name", cards: [{ hash: "753-A" }] },
+    };
+    assert.deepEqual(resolveBadgeEntry(dataset, cache, 753), {
+      size: 5,
+      name: "Bundled Name",
+      cards: [{ hash: "753-A" }],
+    });
+  });
+
+  it("fills in what the dataset lacks from the cache", () => {
+    const dataset = normalizeDataset({ 753: { size: 5 } });
+    const cache = {
+      753: { cards: [{ hash: "753-A", title: "Card A" }] },
+    };
+    assert.deepEqual(resolveBadgeEntry(dataset, cache, 753), {
+      size: 5,
+      name: undefined,
+      cards: [{ hash: "753-A", title: "Card A" }],
+    });
+  });
+
+  it("passes bundled rich cards through verbatim instead of the cache", () => {
+    const rich = normalizeDataset({
+      753: { size: 5, cards: [{ hash: "753-A", title: "Card A", iconUrl: "https://example.test/icon-a" }] },
+    });
+    const counts = normalizeDataset({ 753: { size: 5 } });
+    const cache = {
+      753: { size: 9, name: "Cache Name", cards: [{ hash: "753-Stale" }] },
+    };
+    assert.deepEqual(resolveBadgeEntry(rich, cache, 753), {
+      size: 5,
+      name: "Cache Name",
+      cards: [{ hash: "753-A", title: "Card A", iconUrl: "https://example.test/icon-a" }],
+    });
+    assert.deepEqual(resolveBadgeEntry(counts, cache, 753), {
+      size: 5,
+      name: "Cache Name",
+      cards: [{ hash: "753-Stale" }],
+    });
+  });
+});
+
+describe("badge card cache", () => {
+  it("round-trips a learned entry through localStorage", () => {
+    const storage = fakeStorage();
+    const cache = readBadgeCardCache(storage);
+    writeBadgeCardCacheEntry(storage, cache, 753, {
+      size: 5,
+      cards: [{ hash: "753-A", title: "Card A", iconUrl: "icon-a" }, { hash: "753-B" }],
+    });
+    const reloaded = readBadgeCardCache(storage);
+    assert.deepEqual(reloaded[753]?.cards, [{ hash: "753-A", title: "Card A", iconUrl: "icon-a" }, { hash: "753-B" }]);
+    assert.equal(reloaded[753]?.size, 5);
+  });
+
+  it("ignores corrupt cache content", () => {
+    const storage = fakeStorage({ "TempAsfStm.ASF.STM.BadgeCards.v1": "not json" });
+    const cache = readBadgeCardCache(storage);
+    assert.deepEqual(cache, {});
+    const seed = fakeStorage({ "TempAsfStm.ASF.STM.BadgeCards.v1": JSON.stringify({ 753: { size: "bad" } }) });
+    assert.deepEqual(readBadgeCardCache(seed), {});
+  });
+});
+
+describe("buildBadgeFromCardList", () => {
+  const cardCounts: InventoryCardCounts = {
+    440: {
+      "Game - Card A": cardEntry(5, 1),
+      "Game - Card B": cardEntry(0, 0),
+      "Game - Card C": cardEntry(0, 0),
+      "Game - Card D": cardEntry(1, 0),
+      "Game - Card E": cardEntry(0, 0),
+    },
+  };
+
+  it("derives slots for every card of the set, zero-owned included", () => {
+    const cardList = ["Game - Card A", "Game - Card B", "Game - Card C", "Game - Card D", "Game - Card E"].map(
+      (hash) => ({ hash }),
+    );
+    const badge = buildBadgeFromCardList(440, "Game", 5, cardList, cardCounts);
+    assert.ok(badge);
+    assert.equal(badge.maxCards, 5);
+    assert.deepEqual(
+      badge.cards.map((card) => ({ hash: card.hash, count: card.count, tradableCount: card.tradableCount })),
+      [
+        { hash: "Game - Card A", count: 5, tradableCount: 1 },
+        { hash: "Game - Card B", count: 0, tradableCount: 0 },
+        { hash: "Game - Card C", count: 0, tradableCount: 0 },
+        { hash: "Game - Card D", count: 1, tradableCount: 0 },
+        { hash: "Game - Card E", count: 0, tradableCount: 0 },
+      ],
+    );
+    assert.deepEqual(
+      badge.cards.map((card) => card.item),
+      cardList.map((card) => card.hash),
+    );
+  });
+
+  it("uses cached titles and icons when the card list carries them", () => {
+    const cardList = [
+      { hash: "Game - Card A", title: "Card A", iconUrl: "icon-a" },
+      { hash: "Game - Card B", title: "Card B" },
+      { hash: "Game - Card C" },
+      { hash: "Game - Card D", title: "Card D" },
+      { hash: "Game - Card E", title: "Card E" },
+    ];
+    const badge = buildBadgeFromCardList(440, "Game", 5, cardList, cardCounts);
+    assert.ok(badge);
+    assert.deepEqual(
+      badge.cards.map((card) => ({ item: card.item, iconUrl: card.iconUrl })),
+      [
+        { item: "Card A", iconUrl: "icon-a" },
+        { item: "Card B", iconUrl: "" },
+        { item: "Game - Card C", iconUrl: "" },
+        { item: "Card D", iconUrl: "" },
+        { item: "Card E", iconUrl: "" },
+      ],
+    );
+  });
+
+  it("derives complete slots from the bundled rich layer with an empty cache", () => {
+    // Cache-less first run: the badge-cards record normalizes into full card
+    // objects, the rich entry wins over the cache, and the derived badge
+    // carries bundled titles and artwork with no detail fetch involved.
+    const rich = normalizeDataset({
+      220: {
+        size: 5,
+        cards: [
+          { hash: "220-Alyx Vance", title: "Alyx Vance", iconUrl: "https://example.test/alyx" },
+          { hash: "220-G-Man", title: "G-Man", iconUrl: "https://example.test/gman" },
+          { hash: "220-Gordon Freeman", title: "Gordon Freeman" },
+          { hash: "220-Respite", title: "Respite" },
+          { hash: "220-Witch Hunt", title: "Witch Hunt" },
+        ],
+      },
+    });
+    const resolved = resolveBadgeEntry(rich, {}, 220);
+    assert.equal(resolved.size, 5);
+    assert.ok(resolved.cards);
+    const badge = buildBadgeFromCardList(220, "AppID 220", resolved.size!, resolved.cards!, {
+      220: { "220-Alyx Vance": cardEntry(3, 1), "220-G-Man": cardEntry(0, 0) },
+    });
+    assert.ok(badge);
+    assert.deepEqual(
+      badge.cards.map((card) => ({ item: card.item, hash: card.hash, iconUrl: card.iconUrl })),
+      [
+        { item: "Alyx Vance", hash: "220-Alyx Vance", iconUrl: "https://example.test/alyx" },
+        { item: "G-Man", hash: "220-G-Man", iconUrl: "https://example.test/gman" },
+        { item: "Gordon Freeman", hash: "220-Gordon Freeman", iconUrl: "" },
+        { item: "Respite", hash: "220-Respite", iconUrl: "" },
+        { item: "Witch Hunt", hash: "220-Witch Hunt", iconUrl: "" },
+      ],
+    );
+  });
+
+  it("returns undefined on a card-list/set-size mismatch", () => {
+    const cardList = ["Game - Card A", "Game - Card B", "Game - Card C", "Game - Card D"].map((hash) => ({ hash }));
+    assert.equal(buildBadgeFromCardList(753, "Game", 5, cardList, cardCounts), undefined);
+  });
+
+  it("returns undefined for set sizes below the five-card minimum", () => {
+    const cardList = ["Game - Card A", "Game - Card B"].map((hash) => ({ hash }));
+    assert.equal(buildBadgeFromCardList(753, "Game", 2, cardList, cardCounts), undefined);
+  });
+
+  it("derives badges the matcher can consume (reported scenario)", () => {
+    // Five owned copies of Card A of which one is tradable, one held Card D,
+    // missing B/C/E: the derived badge must yield exactly one swap for a
+    // missing card and never request the owned Card D.
+    const cardList = ["Game - Card A", "Game - Card B", "Game - Card C", "Game - Card D", "Game - Card E"].map(
+      (hash) => ({ hash }),
+    );
+    const badge = buildBadgeFromCardList(440, "Game 440", 5, cardList, cardCounts);
+    assert.ok(badge);
+    badge.cards.sort((a, b) => b.count - a.count);
+    const total = badge.cards.reduce((sum, card) => sum + card.count, 0);
+    badge.maxSets = Math.floor(total / badge.maxCards);
+    badge.lastSet = Math.ceil(total / badge.maxCards);
+    const theirs = buildBadgeFromCardList(
+      440,
+      "Game 440",
+      5,
+      ["Game - Card A", "Game - Card B", "Game - Card C", "Game - Card D", "Game - Card E"].map((hash) => ({
+        hash,
+      })),
+      {
+        440: {
+          "Game - Card A": cardEntry(0, 0),
+          "Game - Card B": cardEntry(2, 2),
+          "Game - Card C": cardEntry(2, 2),
+          "Game - Card D": cardEntry(2, 2),
+          "Game - Card E": cardEntry(2, 2),
+        },
+      },
+    );
+    assert.ok(theirs);
+    const result = computeMatches([badge], [theirs], 0, { debugPrint: () => {}, isMatchEverything: () => true });
+    assert.equal(result.itemsToSend.length, 1, "exactly one swap: only one tradable copy");
+    const received = result.itemsToReceive.flatMap((item) => item.cards.map((card) => card.hash));
+    assert.ok(!received.includes("Game - Card D"), "owned card D must never be requested");
+    assert.ok(
+      received.every((hash) => ["Game - Card B", "Game - Card C", "Game - Card E"].includes(hash)),
+      `swap must request a missing card, got ${received.join(", ")}`,
+    );
   });
 });

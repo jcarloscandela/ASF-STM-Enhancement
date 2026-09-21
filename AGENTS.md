@@ -13,7 +13,10 @@ against ASF bot lists and friends and generates trade offers: set progress
 and requests use owned copies (an already-owned card is never requested),
 offers are capped by currently tradable copies, and a game missing from the
 tradability lookup treats every owned copy as tradable. Candidate badge details
-load with bounded concurrency (6 parallel requests). Version `1.0.0`, new home
+resolve from the single bundled card dataset and a browser card cache first; covered games need
+no badge-detail request at all on the first run — cards render with bundled
+titles and artwork. Badge-detail requests run serially (never parallel) and
+only for games whose card data is not yet known. Version `1.0.0`, new home
 `https://github.com/jcarloscandela/ASF-STM-Enhancement`.
 
 ## Layout
@@ -23,9 +26,15 @@ load with bounded concurrency (6 parallel requests). Version `1.0.0`, new home
 - `src/lib/*.ts` — strict TypeScript libs: `models` (canonical type-only
   declarations), `tradable` (tradability/counting), `settings` (validated
   defaults, merge, scan-plan routing), `steam-schema` (Zod-validated Steam
-  payloads), `matcher-core` (pure trade matching), `helpers` (pure utilities),
-  `storage` (typed JSON persistence), `requests` (GM request resolution, GET,
-  retry policy). All unit-tested via vitest and bundled via normal imports.
+  payloads), `matcher-core` (pure trade matching incl. the tradeoffer handoff),
+  `helpers` (pure utilities), `storage` (typed JSON persistence), `requests`
+  (GM request resolution, GET, retry policy), `resilience` (scan error
+  classification, rate-limit circuit breaker), `badge-page` (gamecards-page
+  parser, badge ordering/set-size normalization), `match-row` (match-row
+  view-data builders), `offer-writer` (trade-offer selection planner,
+  readiness poll). All unit-tested via vitest and bundled via normal imports.
+  `src/ASF-STM.ts` keeps only thin host wiring (XHR shells, DOM building,
+  cookies, timers); behavior lives in `src/lib/*`.
 - `src/templates/` — HTML/CSS fragments consumed as TypeScript module
   imports (`*.ts` render functions, `css.css` raw text); no placeholders.
 - `rolldown.config.ts` — bundler config (single-file output, version
@@ -34,6 +43,18 @@ load with bounded concurrency (6 parallel requests). Version `1.0.0`, new home
 - `dist/` — gitignored build output (single `ASF-STM.user.js` with debug
   behavior behind the in-app debug setting); published as a release
   asset, never committed.
+- `data/badge_cards.json` — single bundled card dataset, inlined into the
+  userscript at build time. Compact encoding: short keys (`s`/`n`/`c`/`h`/`t`/`u`;
+  `normalizeDataset` also accepts the legacy long keys) with rich entries
+  (`size` + full card list of exact market hashes, display titles, and icon
+  paths with the shared `BUNDLED_ICON_URL_PREFIX` bytes stripped) plus
+  size-only entries folded in from the old counts export. Regenerate it from
+  the steam-cards-bot export (cards query for the rich entries, `card_counts`
+  table for the size-only entries); the regeneration step MUST assert the icon
+  prefix across every icon and fail on mismatch. Covered games derive complete
+  badge slots locally on the first run with bundled titles and artwork; the
+  rest fall back to the badge-detail API serially. Learned card lists persist
+  in the browser (`TempAsfStm.ASF.STM.BadgeCards.v1`).
 - `openspec/` — OpenSpec planning artifacts (`specs/` holds the synced main
   specs; `changes/` holds active changes, `changes/archive/` the archived
   ones).
@@ -72,10 +93,15 @@ push/PR, then verifies the single `dist/` file exists with no unreplaced
 - Lint with `pnpm lint` (oxlint) and format with `pnpm format` (oxfmt,
   `printWidth: 120` in `.oxfmtrc.json`); both must pass (`pnpm format:check`
   for the read-only check). There is no prettier config.
-- Tests are vitest (`pnpm test`) with plain fixtures: no browser, no network,
-  and no new runtime dependencies beyond dev tooling. New behavior needs
-  fixture coverage following `test/tradable.test.ts` /
-  `test/settings.test.ts`.
+- Tests are vitest (`pnpm test`) with plain fixtures and no network, and no
+  new runtime dependencies beyond dev tooling. Pure suites use no DOM;
+  DOM-needing suites opt in per file (`// @vitest-environment happy-dom`,
+  devDependency `happy-dom`) with canned documents and faked XHR seams —
+  never a browser, never the network. New behavior needs fixture coverage
+  following `test/tradable.test.ts` / `test/settings.test.ts`; new
+  DOM-touching behavior follows `test/offer-harness.test.ts`.
+  Coverage of `src/lib` is reported via `@vitest/coverage-v8`
+  (`vitest run --coverage`, dev-only).
 - Single-file build discipline: `src/ASF-STM.ts` plus `src/lib/*.ts` and
   `src/templates/` compile via rolldown (`rolldown.config.ts`) into the one
   self-contained `dist/ASF-STM.user.js`. There is no builder script and no

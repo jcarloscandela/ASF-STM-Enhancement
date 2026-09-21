@@ -32,6 +32,7 @@ describe("STORAGE_KEYS", () => {
       blacklist: "TempAsfStm.ASF.STM.Blacklist",
       params: "TempAsfStm.ASF.STM.Params",
       botCache: "TempAsfStm.ASF.STM.BotCache",
+      badgeCards: "TempAsfStm.ASF.STM.BadgeCards",
     });
   });
 });

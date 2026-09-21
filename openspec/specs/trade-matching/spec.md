@@ -54,6 +54,11 @@ The scanner SHALL maintain, per card of the user's badges, both the owned copy c
 - **WHEN** tradability data is unavailable for a badge (failed lookup or badge-page mode)
 - **THEN** the offer capacity of each card equals its owned count and matching behaves as the badge-page scan always has
 
+#### Scenario: Fair-bot matching keeps held cards out and respects tradable capacity
+
+- **WHEN** the user owns five tradable copies of Card A, one held copy of Card D, and zero copies of Cards B, C, and E, and a fair (non-ANY) partner holds two copies of every card
+- **THEN** no proposed swap requests Card D, the total offered copies of Card A never exceed five, and every match row shows exactly the cards its generated offer will exchange
+
 ### Requirement: Match rows display only the exchanged cards
 
 Match rows SHALL display, per side, exactly the cards the generated offer will exchange: the offered side shows the currently tradable copies that will be sent (never a held copy), and the requested side shows only cards the user does not already own within the applicable set targets.
@@ -87,24 +92,43 @@ In inventory mode, badge eligibility SHALL mark a badge as a matching candidate 
 - **WHEN** a badge's owned copies are distributed unevenly across its cards (e.g. five copies of one card, one of another, none of the rest)
 - **THEN** the badge is a candidate as long as at least one copy is currently tradable, regardless of how many copies are held
 
-### Requirement: Badge detail fetches run with bounded concurrency
+### Requirement: Badge detail fetches run serially and never in parallel
 
-The badge-detail stage SHALL fetch candidate badges with bounded concurrency: at most a fixed number of `ajaxgetbadgeinfo` requests SHALL be in flight at once, and each subsequent launch SHALL be separated by the web limiter delay, keeping the same per-request rate-limit friendliness as the serial scan. Each badge SHALL settle exactly once - on a successful detail fetch or on an invalid-badge response - and badges that fail with retryable errors SHALL retry within the global error budget before the scan aborts with the existing visible error. Invalid badges SHALL be filtered only after every badge has settled, and the resulting candidate list and match output SHALL be identical to a serial scan of the same data.
+The badge-detail stage SHALL NOT issue parallel requests to Steam. Every `ajaxgetbadgeinfo` request SHALL run one at a time, separated from the previous request by the web limiter delay, and retryable failures SHALL retry the same badge within the global error budget under the same serial constraint before the scan aborts with the existing visible error. Invalid badges SHALL be excluded from the candidate list, and the resulting candidate list and match output SHALL be identical to a scan whose data came from the bundled dataset.
 
-#### Scenario: Candidate count exceeds the concurrency cap
+#### Scenario: Detail requests never overlap
 
-- **WHEN** more candidate badges than the concurrency limit are pending
-- **THEN** at most that many detail requests are in flight at once, and each next request launches only after a web-limiter delay
-
-#### Scenario: Results match a serial scan
-
-- **WHEN** the same candidate badges are scanned by the concurrent detail stage and by a serial scan
-- **THEN** both produce the same candidate list (invalid badges filtered) and the same match output
+- **WHEN** multiple candidate games require badge-detail fetches
+- **THEN** each request completes or times out before the next one starts, with a web-limiter delay in between
 
 #### Scenario: Retryable failure retries within the error budget
 
 - **WHEN** a badge detail request fails with a retryable error while the global error budget is not exhausted
 - **THEN** that badge retries after the shared retry delay, and a scan-aborting failure surfaces the existing visible error instead of being retried indefinitely
+
+#### Scenario: Dataset-derived badges match detail-derived badges
+
+- **WHEN** the same game is scanned once with its card list from the bundled dataset and once with a badge-detail fetch
+- **THEN** both produce the same candidate badge (set size, card slots, and market hashes) and the same match output
+
+### Requirement: Learned badge card data persists in the browser
+
+The scanner SHALL persist every game's learned card data (set size, card titles, and per-card market hashes) to browser localStorage when it is first fetched from the badge-detail API or the remote badges database, and SHALL reuse the persisted data on every later scan instead of fetching that game again. Only games with no bundled, cached, or otherwise known card data SHALL trigger a badge-detail request. The cache SHALL be versioned so a future format change can invalidate it cleanly, and corrupt or unusable cache content SHALL be ignored without breaking the scan.
+
+#### Scenario: Learned games are not fetched again
+
+- **WHEN** a game's card list was learned from a badge-detail fetch in an earlier scan and the game is a candidate again
+- **THEN** the later scan derives the badge from the persisted card data and issues no badge-detail request for it
+
+#### Scenario: Only unknown games trigger detail requests
+
+- **WHEN** a scan runs twice over the same candidate games with no bundled data for them
+- **THEN** the first scan performs one serial detail fetch per game and the second scan performs none, deriving every badge from the persisted cache
+
+#### Scenario: Corrupt cache is ignored safely
+
+- **WHEN** the persisted card cache is missing, corrupt, or in an outdated format
+- **THEN** the scan proceeds by fetching the affected games' details as if they were unknown, and never fails because of the cache
 
 ### Requirement: Missing tradability data falls back safely
 
@@ -136,17 +160,57 @@ The system SHALL, when building a trade offer on the Steam trade-offer page, sel
 
 ### Requirement: Inventory-mode scan derives badges from inventory only
 
-When the resolved scan plan is inventory mode, the scanner SHALL derive the badge candidate list exclusively from the fetched Steam inventory (tradable counts mapped onto the badges database) and SHALL NOT issue requests to the badge pages (`/badges?p=N`) nor to per-badge detail pages during candidate discovery.
+When the resolved scan plan is inventory mode, the scanner SHALL derive badge candidates and their card data from the fetched Steam inventory combined with its bundled dataset and the browser-persisted card cache, and SHALL NOT issue requests to the badge pages (`/badges?p=N`). One compact dataset SHALL be bundled: rich entries carrying, for the games they cover, the full per-card list (exact `market_hash_name`, display title, and icon path) with the set size, plus size-only entries carrying set sizes for the remaining games (optionally with per-card hashes). Icon paths SHALL be stored with the shared CDN prefix stripped and reconstructed at load, resolving to values identical to the full icon URLs. Badge-detail requests (`ajaxgetbadgeinfo`) SHALL be issued only for candidate games whose card list is neither bundled nor persisted in the browser cache, and only serially - one request at a time, separated by the web limiter delay; parallel badge-detail requests to Steam SHALL NOT be made. The remote badges database SHALL be fetched lazily, only when a candidate game's set size is not present in the bundled dataset or the browser cache, and it SHALL provide both set sizes and badge titles for the uncovered games it covers.
 
 #### Scenario: Inventory mode performs no badge-page requests
 
 - **WHEN** a scan runs with inventory mode resolved and the inventory fetch plus badges database load succeed
-- **THEN** zero HTTP requests are issued to badge pages while building the candidate badge list
+- **THEN** zero HTTP requests are issued to badge pages while building the candidate badge list and their card data, and badge-detail requests are issued only for games with no known card data, serially
 
 #### Scenario: Inventory mode result matches inventory eligibility
 
 - **WHEN** a scan runs in inventory mode over an inventory with unbalanced (duplicated/incomplete) badges
-- **THEN** the candidate badge list contains exactly the unbalanced appIds from the inventory-to-badges-database mapping, and the scan proceeds to per-card detail from there
+- **THEN** the candidate badge list contains exactly the eligible appIds from the inventory-to-badges-database mapping, and the scan proceeds to bot matching, deriving locally every game whose card data is bundled or cached
+
+#### Scenario: Compact encoding resolves identical card data
+
+- **WHEN** a candidate game's entry is stored in the compact bundled encoding (short keys, prefix-stripped icon paths)
+- **THEN** the badge's card slots are derived with the exact market hashes, display titles, and full icon URLs identical to the uncompressed encoding, with no additional network request
+
+#### Scenario: Badge-cards dataset takes precedence over the counts dataset
+
+- **WHEN** a candidate game's data is present both as a rich entry and as a folded-in size-only entry in the single bundled dataset
+- **THEN** the badge's card slots are derived from the rich entry, and the size-only entry is not consulted for that game
+
+#### Scenario: Covered game renders complete cards on the first run
+
+- **WHEN** a candidate game's card list is bundled in the bundled dataset and the browser cache is empty
+- **THEN** the badge's card slots are derived locally with their exact market hashes, display titles, and icon URLs, no badge-detail request is issued for that game, and no request is needed to render its cards with real artwork and names
+
+#### Scenario: Counts-only game keeps its size coverage
+
+- **WHEN** a candidate game has a size-only entry in the bundled dataset
+- **THEN** the game resolves its set size from the bundled dataset exactly as before this change, with no additional network request for the size lookup
+
+#### Scenario: Covered game requires no badge-detail request
+
+- **WHEN** a candidate game's card list (per-card market hashes) is present in the bundled dataset or in the browser-persisted cache
+- **THEN** the badge's card slots are derived locally from that card list and the inventory counts, and no badge-detail request is issued for that game
+
+#### Scenario: Uncovered game falls back to the serial detail request
+
+- **WHEN** a candidate game's card list is not present in the bundled dataset or the browser cache
+- **THEN** its detail is fetched with a single serial `ajaxgetbadgeinfo` request, separated from every other request by the web limiter delay, and never in parallel with another badge-detail request
+
+#### Scenario: Set size resolves locally when covered
+
+- **WHEN** every candidate game's set size is present in the bundled dataset
+- **THEN** eligibility completes without fetching the remote badges database
+
+#### Scenario: Uncovered set size triggers a lazy remote database fetch
+
+- **WHEN** at least one candidate game's set size is missing from the bundled dataset and the browser cache
+- **THEN** the remote badges database is fetched once for the run and provides the set sizes and badge titles of the uncovered games
 
 ### Requirement: Inventory-mode failure does not silently fall back to badge pages
 
