@@ -17,4 +17,4 @@
 
 - [x] 3.1 Remove `tsx` fallback after parity is proven and refresh the lockfile, verified by clean `pnpm install --frozen-lockfile` plus full `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build` passing with no `tsx` resolution
 - [x] 3.2 Update CI workflow and contributor docs (minimum Node version, experimental-runner note, pin/rollback procedure), verified by `build.yml` executing tests and build via the Oxc path and README describing the new commands
-- [ ] 3.3 Run final validation across Windows and CI Linux, verified by `openspec validate --change adopt-oxc-typescript-runner --strict` passing and both `dist/` files containing the current version string with debug lines stripped only in release
+- [x] 3.3 Run final validation across Windows and CI Linux, verified by `openspec validate --change adopt-oxc-typescript-runner --strict` passing and both `dist/` files containing the current version string with debug lines stripped only in release
