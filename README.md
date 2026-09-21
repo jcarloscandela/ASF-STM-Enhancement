@@ -51,11 +51,19 @@ Prerequisites: Node.js 22+ and [pnpm](https://pnpm.io/) 12 (see `packageManager`
 pnpm install --frozen-lockfile
 pnpm typecheck   # tsc --noEmit (strict)
 pnpm lint        # oxlint
-pnpm test        # vitest run
-pnpm build       # rebuild dist/ASF-STM.user.js + dist/ASF-STM.debug.js
+pnpm test        # vitest, launched via the Oxc runner hook
+pnpm build       # scripts/build.ts via the Oxc runner; rebuilds dist/ASF-STM.user.js + dist/ASF-STM.debug.js
 pnpm format      # oxfmt write
 pnpm format:check  # oxfmt --check
 ```
+
+TypeScript execution uses the Oxc runner (`node --import
+@oxc-node/core/register`, `oxnode` CLI for watch mode) — experimental,
+pinned exactly (`@oxc-node/cli` + `@oxc-node/core` `0.1.3`). It strips types
+without checking, so `pnpm typecheck` remains the type gate. Rollback to
+`tsx`: restore `tsx` in `devDependencies`, set `build` back to
+`tsx scripts/build.ts` and `test` back to `vitest run`, then
+`pnpm install`.
 
 CI (`.github/workflows/build.yml`) runs typecheck, lint, tests, and build on push/PR, then verifies both `dist/` files exist with no unreplaced `{{PLACEHOLDER}}` tokens.
 
@@ -70,4 +78,4 @@ CI (`.github/workflows/build.yml`) runs typecheck, lint, tests, and build on pus
 
 ### Versioning and releases
 
-The single version source is `package.json` (`1.0.0`). The build injects it into both userscript headers, so shipped files, package metadata, and the release tag always agree. Bumping the version on the default branch (`master`) runs the full pipeline and drafts a GitHub release named `ASF-STM-Enhancement V<version>` carrying both distributables.
+The single version source is `package.json` (`1.0.1`). The build injects it into both userscript headers, so shipped files, package metadata, and the release tag always agree. Bumping the version on the default branch (`master`) runs the full pipeline and drafts a GitHub release named `ASF-STM-Enhancement V<version>` carrying both distributables.

@@ -39,11 +39,18 @@ Prerequisites: Node.js 22+ and pnpm 12 (see `packageManager` in
 pnpm install --frozen-lockfile
 pnpm typecheck    # tsc --noEmit (strict)
 pnpm lint         # oxlint
-pnpm test         # vitest run
-pnpm build        # rebuild dist/ASF-STM.user.js + dist/ASF-STM.debug.js
+pnpm test         # vitest, launched via the Oxc runner hook
+pnpm build        # scripts/build.ts via the Oxc runner; rebuilds dist/ASF-STM.user.js + dist/ASF-STM.debug.js
 pnpm format       # oxfmt src/lib test scripts (writes in place)
 pnpm format:check # oxfmt --check
 ```
+
+TypeScript execution uses the Oxc runner (`node --import
+@oxc-node/core/register`, `oxnode` CLI for watch mode) — experimental,
+pinned exactly (`@oxc-node/cli` + `@oxc-node/core` `0.1.3`). It strips types
+without checking, so `pnpm typecheck` remains the type gate. Rollback to
+`tsx`: restore `tsx` in `devDependencies`, set `build` back to
+`tsx scripts/build.ts` and `test` back to `vitest run`, then `pnpm install`.
 
 CI (`.github/workflows/build.yml`) runs typecheck, lint, tests, and build on
 push/PR, then verifies both `dist/` files exist with no unreplaced
