@@ -62,6 +62,105 @@ export type BadgeCardCache = Record<string, BadgeCardCacheEntry>;
 export const BADGE_CARDS_STORAGE_KEY = "TempAsfStm.ASF.STM.BadgeCards.v1";
 
 /**
+ * Compact publish encoding (dense tuple arrays).
+ *
+ * Per game: `[size, name, cards]` where `name` is `""` when unknown and
+ * `cards` is either absent (size-only) or an array of `[h, t, u]` tuples:
+ * - `h`: hash suffix after `"<appId>-"`, or `"=" + literal` when the hash
+ *   lacks that prefix (foil / special cards).
+ * - `t`: `""` when the title equals the hash suffix, else the literal title.
+ *   Absent title decodes to no title (card without display name).
+ * - `u`: `""` when no artwork, full `http...` URL passed through, else the
+ *   icon tail with `BUNDLED_ICON_URL_PREFIX` stripped.
+ *
+ * Positional slots are fixed length so the encoder stays trivial and the
+ * decoder stays a single linear pass.
+ */
+export type CompactPublishCard = [h: string, t: string, u: string];
+export type CompactPublishEntry = [size: number, name: string, cards?: CompactPublishCard[]];
+export type CompactPublishDataset = Record<string, CompactPublishEntry>;
+
+/** Compacted-dataset publish budget (bytes of the inlined JSON payload). */
+export const COMPACT_DATASET_BUDGET_BYTES = 4_500_000;
+/** Built-userscript publish budget (bytes of `dist/ASF-STM.user.js`). */
+export const BUILT_USERSCRIPT_BUDGET_BYTES = 6_000_000;
+
+/** Encodes one normalized entry into its compact publish tuple. */
+export function encodeCompactEntry(appId: string, entry: BadgeDatasetEntry): CompactPublishEntry {
+  const prefix = `${appId}-`;
+  const cards = entry.cards?.map((card): CompactPublishCard => {
+    const h = card.hash.startsWith(prefix) ? card.hash.slice(prefix.length) : `=${card.hash}`;
+    const suffix = h.startsWith("=") ? h.slice(1) : h;
+    const t = card.title === undefined ? `\0` : card.title === suffix ? "" : card.title;
+    let u = "";
+    if (card.iconUrl !== undefined) {
+      u = card.iconUrl.startsWith(BUNDLED_ICON_URL_PREFIX)
+        ? card.iconUrl.slice(BUNDLED_ICON_URL_PREFIX.length)
+        : card.iconUrl;
+    }
+    return [h, t, u];
+  });
+  return cards === undefined ? [entry.size, entry.name ?? ""] : [entry.size, entry.name ?? "", cards];
+}
+
+/** Encodes a normalized authoring-shaped record into the publish dataset. */
+export function compactDatasetForPublish(raw: Record<string, BadgeDatasetEntry>): CompactPublishDataset {
+  const out: CompactPublishDataset = {};
+  for (const [appId, entry] of Object.entries(raw)) {
+    if (typeof entry?.size !== "number" || !Number.isFinite(entry.size) || entry.size <= 0) {
+      continue;
+    }
+    out[appId] = encodeCompactEntry(appId, entry);
+  }
+  return out;
+}
+
+/** Decodes one compact publish tuple back into a dataset entry. */
+function decodeCompactEntry(appId: string, tuple: unknown): BadgeDatasetEntry | undefined {
+  if (!Array.isArray(tuple) || typeof tuple[0] !== "number" || !Number.isFinite(tuple[0]) || tuple[0] <= 0) {
+    return undefined;
+  }
+  const entry: BadgeDatasetEntry = { size: tuple[0] };
+  if (typeof tuple[1] === "string" && tuple[1].length > 0) {
+    entry.name = tuple[1];
+  }
+  if (tuple.length > 2) {
+    if (!Array.isArray(tuple[2])) {
+      return entry;
+    }
+    const cards: BadgeDatasetCard[] = [];
+    for (const raw of tuple[2]) {
+      if (!Array.isArray(raw) || typeof raw[0] !== "string" || raw[0].length === 0) {
+        continue;
+      }
+      const h: string = raw[0];
+      const hash = h.startsWith("=") ? h.slice(1) : `${appId}-${h}`;
+      if (hash.length === 0) {
+        continue;
+      }
+      const card: BadgeDatasetCard = { hash };
+      const t: unknown = raw[1];
+      if (t === "\0" || t === undefined) {
+        // No title known; leave unset.
+      } else if (typeof t === "string" && t.length === 0) {
+        card.title = h.startsWith("=") ? h.slice(1) : h;
+      } else if (typeof t === "string") {
+        card.title = t;
+      }
+      const u: unknown = raw[2];
+      if (typeof u === "string" && u.length > 0) {
+        card.iconUrl = expandBundledIconUrl(u);
+      }
+      cards.push(card);
+    }
+    if (cards.length > 0) {
+      entry.cards = cards;
+    }
+  }
+  return entry;
+}
+
+/**
  * Normalizes any supported dataset shape into a `BadgeDataset`:
  * - the counts-only export (`[{"app_id": "1000010", "card_count": "5"}, ...]`)
  * - the counts record (`{"1000010": {"size": 5, "name"?: ..., "cards"?: ["hash", ...]}}`;
@@ -97,6 +196,13 @@ export function normalizeDataset(raw: unknown): BadgeDataset {
 
   if (typeof raw === "object" && raw !== null) {
     for (const [appId, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (Array.isArray(value)) {
+        const decoded = decodeCompactEntry(appId, value);
+        if (decoded !== undefined) {
+          dataset[appId] = decoded;
+        }
+        continue;
+      }
       if (typeof value !== "object" || value === null) {
         continue;
       }

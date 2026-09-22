@@ -22,7 +22,7 @@ treats every owned copy as tradable. Candidate badge details
 resolve from the single bundled card dataset and a browser card cache first; covered games need
 no badge-detail request at all on the first run — cards render with bundled
 titles and artwork. Badge-detail requests run serially (never parallel) and
-only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.4`, new home
+only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.5`, new home
 `https://github.com/jcarloscandela/ASF-STM-Enhancement`.
 
 ## Layout
@@ -49,12 +49,16 @@ only for games whose card data is not yet known. An interrupted badge-detail pha
 - `dist/` — gitignored build output (single `ASF-STM.user.js` with debug
   behavior behind the in-app debug setting); published as a release
   asset, never committed.
-- `data/badge_cards.json` — single bundled card dataset, inlined into the
-  userscript at build time. Compact encoding: short keys (`s`/`n`/`c`/`h`/`t`/`u`;
-  `normalizeDataset` also accepts the legacy long keys) with rich entries
+- `data/badge_cards.json` — single bundled card dataset, kept as readable
+  authoring source (long keys `size`/`name`/`cards` + `hash`/`title`/`iconUrl`
+  with full icon URLs) and compacted at publish time by the rolldown
+  `badge-cards-compact` plugin into dense tuple arrays (`[size, name, cards]`
+  with `[hashSuffix, title, iconTail]` cards, `"<appId>-"` hash prefixes
+  elided and the shared `BUNDLED_ICON_URL_PREFIX` bytes stripped;
+  `normalizeDataset` decodes the publish encoding and still accepts the
+  legacy long keys and short keys `s`/`n`/`c`/`h`/`t`/`u`) with rich entries
   (`size` + full card list of exact market hashes, display titles, and icon
-  paths with the shared `BUNDLED_ICON_URL_PREFIX` bytes stripped) plus
-  size-only entries folded in from the old counts export. Regenerate it from
+  paths) plus size-only entries folded in from the old counts export. Regenerate it from
   the steam-cards-bot export (cards query for the rich entries, `card_counts`
   table for the size-only entries); the regeneration step MUST assert the icon
   prefix across every icon and fail on mismatch. Covered games derive complete

@@ -41,6 +41,9 @@ jobs:
           test -f dist/ASF-STM.user.js
           ! grep -RF '{{' dist/ || (echo 'Unreplaced placeholder in dist/' && exit 1)
           ! grep -RF '// DEBUG' dist/ || (echo 'Debug marker left in dist/' && exit 1)
+          DIST_BYTES=$(wc -c < dist/ASF-STM.user.js)
+          echo "dist/ASF-STM.user.js: ${DIST_BYTES} B (budget 6000000 B)"
+          test "$DIST_BYTES" -le 6000000 || (echo "dist exceeds 6000000 B budget" && exit 1)
       - name: Set release env
         run: |
           VERSION=$(node -p "require('./package.json').version")
