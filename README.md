@@ -14,6 +14,7 @@ New home: `https://github.com/jcarloscandela/ASF-STM-Enhancement`
 
 - Inventory scan: scan your inventory in only ~10 seconds for typical libraries (\~6,000 card items; +3s per extra ~2,000 items); bundled card dataset and a browser card cache skip badge-detail requests for known games, and badge details for the rest load serially (never in parallel), keeping badge-heavy accounts safe and fast.
 - Scan resilience: Steam request failures are classified (rate-limited / auth / transient / unknown) and a circuit breaker fails fast with a visible cooldown during rate-limit windows, recovering automatically instead of hammering a throttled endpoint.
+- Crash resume: a badge-detail phase interrupted by a crash or reload snapshots its queue and derived badge state to per-tab `sessionStorage`, so the next Scan in the same tab resumes where it stopped — plan- and version-validated, cleared on completion or stop, with corrupt or stale records silently ignored in favor of a fresh scan.
 - Card datasets: `data/badge_cards.json` is the single bundled card dataset — full card lists with display titles and artwork for covered games plus set sizes for the rest — shipped in a compact encoding (short keys, shared icon-URL prefix stripped) and bundled into the userscript at build time. Covered games skip the badge-detail API entirely (with real names and artwork from the first run); unknown games fall back to it serially, and what it learns is cached in the browser for next time.
 - Friend match: match with your public-inventory friends (friends-only/private inventories mark badges as private).
 - Scan filters: add badge `appId` filters to skip full scans and cut scan time.
@@ -72,7 +73,7 @@ CI (`.github/workflows/build.yml`) runs typecheck, lint, tests, and build on pus
 ### Layout
 
 - `src/ASF-STM.ts` — userscript source (strict TypeScript, bundled by rolldown).
-- `src/lib/*.ts` — strict TypeScript libs: `models` (canonical type-only declarations), `tradable`, `settings`, `steam-schema` (Zod payload validation), `matcher-core` (pure matching incl. the tradeoffer handoff), `helpers` (pure utilities), `storage` (typed JSON persistence), `requests` (GM request resolution/GET/retry), `badge-page` (gamecards parser, badge ordering/set sizes), `match-row` (match-row view data), `offer-writer` (offer selection planner), unit-tested via vitest and bundled via normal imports.
+- `src/lib/*.ts` — strict TypeScript libs: `models` (canonical type-only declarations), `tradable`, `settings`, `steam-schema` (Zod payload validation), `matcher-core` (pure matching incl. the tradeoffer handoff), `helpers` (pure utilities), `storage` (typed JSON persistence), `scan-resume` (temporary interrupted-scan resume record), `requests` (GM request resolution/GET/retry), `badge-page` (gamecards parser, badge ordering/set sizes), `match-row` (match-row view data), `offer-writer` (offer selection planner), unit-tested via vitest and bundled via normal imports.
 - `src/templates/` — HTML/CSS fragments consumed as TypeScript module imports (`*.ts` render functions, `css.css` raw text).
 - `rolldown.config.ts` — bundler config (single-file output, version define, userscript metadata banner).
 - `test/*.test.ts` — vitest suite (plain fixtures, no network; DOM-needing suites use the happy-dom harness with canned documents).
@@ -80,4 +81,4 @@ CI (`.github/workflows/build.yml`) runs typecheck, lint, tests, and build on pus
 
 ### Versioning and releases
 
-The single version source is `package.json` (`1.0.2`). The build injects it into the userscript header, so the shipped file, package metadata, and the release tag always agree. Bumping the version on the default branch (`master`) runs the full pipeline and drafts a GitHub release named `ASF-STM-Enhancement V<version>` carrying the single distributable.
+The single version source is `package.json` (`1.0.3`). The build injects it into the userscript header, so the shipped file, package metadata, and the release tag always agree. Bumping the version on the default branch (`master`) runs the full pipeline and drafts a GitHub release named `ASF-STM-Enhancement V<version>` carrying the single distributable.

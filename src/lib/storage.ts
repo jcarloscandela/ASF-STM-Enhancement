@@ -13,13 +13,14 @@ export interface StorageLike {
   removeItem(key: string): void;
 }
 
-/** Persisted key names, unchanged from the pre-extraction userscript. */
+/** Persisted key names; `scanResume` is new (fix-badge-detail-phase-completion), the rest are unchanged from the pre-extraction userscript. */
 export const STORAGE_KEYS = {
   settings: "TempAsfStm.ASF.STM.Settings",
   blacklist: "TempAsfStm.ASF.STM.Blacklist",
   params: "TempAsfStm.ASF.STM.Params",
   botCache: "TempAsfStm.ASF.STM.BotCache",
   badgeCards: "TempAsfStm.ASF.STM.BadgeCards",
+  scanResume: "TempAsfStm.ASF.STM.ScanResume",
 } as const;
 
 /** One of the declared persisted keys. */

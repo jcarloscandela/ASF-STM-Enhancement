@@ -37,6 +37,13 @@ import {
 } from "./lib/resilience";
 import { buildBadgeFromCardList, buildInventoryCardCounts, buildScanEligibility } from "./lib/tradable";
 import {
+  buildScanResumeRecord,
+  clearScanResume,
+  readScanResume,
+  writeScanResume,
+  type ScanResumeRecord,
+} from "./lib/scan-resume";
+import {
   normalizeDataset,
   readBadgeCardCache,
   writeBadgeCardCacheEntry,
@@ -88,6 +95,11 @@ declare const unsafeWindow: any;
   let myBadges: Badge[] = [];
   let botBadges: Badge[] = [];
   let inventoryCardCounts: InventoryCardCounts | null = null;
+  // Scan-resume state (fix-badge-detail-phase-completion): the plan key
+  // snapshots the resolved scan plan at click time; a validated record read
+  // at the scan entry is consumed by GetOwnCards.
+  let scanResumePlanKey = "";
+  let pendingScanResume: ScanResumeRecord | undefined;
   // Single bundled dataset: rich card lists (hashes + titles + icon paths)
   // plus size-only entries folded in from the old counts export.
   let cardDataset: BadgeDataset = {};
@@ -608,33 +620,70 @@ declare const unsafeWindow: any;
     let pendingIndex = 0;
     let aborted = false;
 
-    // Phase 1: derive every badge whose card list is already known.
     const pending: Array<{ appId: number; badge: Badge }> = [];
-    for (const badge of myBadges) {
-      const cardList = resolveBadgeCardList(badge.appId);
-      if (cardList === undefined) {
-        pending.push({ appId: badge.appId, badge });
-        continue;
+
+    // Resume: a validated record from an interrupted run restores the phase
+    // state and skips Phase 1 (restored badges already carry their derived
+    // state); anything that fails validation falls through to a fresh
+    // derivation below.
+    const resumeRecord = pendingScanResume;
+    pendingScanResume = undefined;
+    let resumed = false;
+    if (resumeRecord !== undefined) {
+      const restored: typeof pending = [];
+      for (const appId of resumeRecord.pendingAppIds) {
+        const badge = resumeRecord.myBadges.find((candidate) => candidate.appId === appId);
+        if (badge === undefined) {
+          restored.length = 0;
+          break;
+        }
+        restored.push({ appId, badge });
       }
-      const derived = buildBadgeFromCardList(
-        badge.appId,
-        resolveBadgeTitle(badge.appId),
-        resolveBadgeSize(badge.appId) ?? cardList.length,
-        cardList,
-        inventoryCardCounts!,
-      );
-      if (derived === undefined) {
-        // Data problem (size below five, or a card list disagreeing with the
-        // set size): fetch the badge authoritatively instead of dropping it.
-        pending.push({ appId: badge.appId, badge });
-        continue;
+      if (restored.length === resumeRecord.pendingAppIds.length) {
+        myBadges = resumeRecord.myBadges;
+        inventoryCardCounts = resumeRecord.inventoryCardCounts;
+        cardNames = new Set<string>();
+        for (const badge of myBadges) {
+          for (const card of badge.cards) {
+            cardNames.add(card.hash);
+          }
+        }
+        pending.push(...restored);
+        pendingIndex = Math.min(resumeRecord.pendingIndex, pending.length);
+        resumed = true;
+        debugPrint(`resuming badge-detail phase at ${pendingIndex}/${pending.length}`);
       }
-      Object.assign(badge, derived);
-      for (const card of derived.cards) {
-        cardNames.add(card.hash);
+    }
+
+    if (!resumed) {
+      // Phase 1: derive every badge whose card list is already known.
+      for (const badge of myBadges) {
+        const cardList = resolveBadgeCardList(badge.appId);
+        if (cardList === undefined) {
+          pending.push({ appId: badge.appId, badge });
+          continue;
+        }
+        const derived = buildBadgeFromCardList(
+          badge.appId,
+          resolveBadgeTitle(badge.appId),
+          resolveBadgeSize(badge.appId) ?? cardList.length,
+          cardList,
+          inventoryCardCounts!,
+        );
+        if (derived === undefined) {
+          // Data problem (size below five, or a card list disagreeing with the
+          // set size): fetch the badge authoritatively instead of dropping it.
+          pending.push({ appId: badge.appId, badge });
+          continue;
+        }
+        Object.assign(badge, derived);
+        for (const card of derived.cards) {
+          cardNames.add(card.hash);
+        }
       }
     }
     progressRadials.badges.steps = pending.length;
+    progressRadials.badges.currentStep = 0;
     if (pending.length === 0) {
       finish();
       return;
@@ -642,11 +691,35 @@ declare const unsafeWindow: any;
 
     // Phase 2: serial detail fetch - one request at a time, web-limiter paced.
 
+    // Snapshots the in-flight phase (queue position + derived state) so a
+    // crash or reload can resume it; written once at phase start and once
+    // per completed entry, never on a retry.
+    function saveResumeRecord(): void {
+      if (scanResumePlanKey === "") {
+        return;
+      }
+      writeScanResume(
+        sessionStorage,
+        buildScanResumeRecord({
+          planKey: scanResumePlanKey,
+          myBadges,
+          inventoryCardCounts: inventoryCardCounts ?? {},
+          pendingAppIds: pending.map((entry) => entry.appId),
+          pendingIndex,
+          badgesSteps: progressRadials.badges.steps,
+        }),
+      );
+    }
+    saveResumeRecord();
+
     function fillCards(
       badge: Badge,
       rgCards: Array<{ title: string; markethash: string; owned: number; imgurl: string }>,
     ): void {
       badge.maxCards = rgCards.length;
+      // Idempotent fill: rebuild the slot list instead of appending, so a
+      // resumed or retried entry can never duplicate cards.
+      badge.cards = [];
       const perApp = inventoryCardCounts?.[badge.appId];
       for (let i = 0; i < rgCards.length; i++) {
         const card = rgCards[i]!;
@@ -687,6 +760,13 @@ declare const unsafeWindow: any;
         stopEventCleanup("User interrupt");
         return;
       }
+      // Completion guard: the pending queue is exhausted - hand off through the
+      // same path as the zero-pending fast path instead of reading past the end
+      // (`entry.appId` on undefined) or issuing another badge-detail request.
+      if (pendingIndex >= pending.length) {
+        finish();
+        return;
+      }
       // Circuit breaker gate: while Steam is rate-limiting, fail fast with a
       // retryable cooldown error instead of hammering the endpoint.
       const detailGate = scanBreaker.check();
@@ -697,7 +777,6 @@ declare const unsafeWindow: any;
         aborted = true;
         return;
       }
-      updateProgress("badges");
       const entry = pending[pendingIndex]!;
       let url = "https://steamcommunity.com/" + myProfileLink + "/ajaxgetbadgeinfo/" + entry.appId + "?l=english";
       let xhr = new XMLHttpRequest();
@@ -737,6 +816,8 @@ declare const unsafeWindow: any;
                 myBadges.splice(index, 1);
               }
               pendingIndex++;
+              updateProgress("badges");
+              saveResumeRecord();
               setTimeout(fetchNext, globalSettings.weblimiter);
               return;
             }
@@ -747,6 +828,8 @@ declare const unsafeWindow: any;
                 fillCards(entry.badge, xhr.response.badgedata.rgCards);
                 learnBadgeCards(entry.badge);
                 pendingIndex++;
+                updateProgress("badges");
+                saveResumeRecord();
                 setTimeout(fetchNext, globalSettings.weblimiter);
                 return;
               } else {
@@ -815,6 +898,8 @@ declare const unsafeWindow: any;
       if (aborted) {
         return;
       }
+      // Phase/scan completion: no resume record may survive it.
+      clearScanResume(sessionStorage);
       debugPrint("populated");
 
       debugTime("Filter and sort");
@@ -1507,6 +1592,10 @@ declare const unsafeWindow: any;
   }
 
   function stopEventCleanup(reason: string): void {
+    // Stop or abort: no in-flight resume record may survive it, so the next
+    // scan starts fresh (a crash never reaches this function, which is what
+    // leaves the record available for resume).
+    clearScanResume(sessionStorage);
     // Hide throbber
     (document.querySelector("#throbber") as HTMLElement).style.display = "none";
     enableButton();
@@ -1563,6 +1652,11 @@ declare const unsafeWindow: any;
     // A click carries a MouseEvent (truthy) while programmatic calls carry a
     // plan or nothing; the cast preserves the original truthiness behavior.
     const scanPlan = (pendingPlan as ScanPlan | undefined) || resolveScanPlan(globalSettings);
+    // Resume decision: a version- and plan-validated record from an
+    // interrupted badge-detail phase continues that phase in GetOwnCards;
+    // every mismatch degrades silently to a fresh scan.
+    scanResumePlanKey = JSON.stringify(scanPlan);
+    pendingScanResume = readScanResume(sessionStorage, scanResumePlanKey);
     if (globalSettings.preventClose) {
       window.addEventListener("beforeunload", function (e) {
         e.preventDefault();

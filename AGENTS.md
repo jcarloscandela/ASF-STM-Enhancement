@@ -20,7 +20,7 @@ treats every owned copy as tradable. Candidate badge details
 resolve from the single bundled card dataset and a browser card cache first; covered games need
 no badge-detail request at all on the first run — cards render with bundled
 titles and artwork. Badge-detail requests run serially (never parallel) and
-only for games whose card data is not yet known. Version `1.0.2`, new home
+only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.3`, new home
 `https://github.com/jcarloscandela/ASF-STM-Enhancement`.
 
 ## Layout
@@ -31,7 +31,7 @@ only for games whose card data is not yet known. Version `1.0.2`, new home
   declarations), `tradable` (tradability/counting), `settings` (validated
   defaults, merge, scan-plan routing), `steam-schema` (Zod-validated Steam
   payloads), `matcher-core` (pure trade matching incl. the tradeoffer handoff),
-  `helpers` (pure utilities), `storage` (typed JSON persistence), `requests`
+  `helpers` (pure utilities), `storage` (typed JSON persistence), `scan-resume` (temporary interrupted-scan resume record), `requests`
   (GM request resolution, GET, retry policy), `resilience` (scan error
   classification, rate-limit circuit breaker), `badge-page` (gamecards-page
   parser, badge ordering/set-size normalization), `match-row` (match-row
