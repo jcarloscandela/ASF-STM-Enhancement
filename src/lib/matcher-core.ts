@@ -94,11 +94,17 @@ export function computeMatches(
       let foundMatch = false;
       for (let j = 0; j < theirBadge.maxCards; j++) {
         //index of card they give
-        // Partner retain-one (openspec change audit-badge-trade-selection):
-        // a partner only gives a card while they keep at least one copy.
-        // Their tradability is unknown (no tradableCount on partner badges),
-        // so the owned count applies - for every partner, ANY-mode included.
-        if (theirBadge.cards[j]!.count > 0 && (theirBadge.cards[j]!.tradableCount ?? theirBadge.cards[j]!.count) > 1) {
+        // Partner give condition (openspec change selfish-trade-matching):
+        // ANY-mode partners are pure card sources - ownership alone suffices,
+        // even their last copy. Fair partners keep the retain-one rule: they
+        // only give a card while they keep at least one copy. Their
+        // tradability is unknown (no tradableCount on partner badges), so the
+        // owned count applies to the retain term.
+        const partnerGives = theirBadge.cards[j]!;
+        const partnerCanGive = isMatchEverything(botIndex)
+          ? partnerGives.count > 0
+          : partnerGives.count > 0 && (partnerGives.tradableCount ?? partnerGives.count) > 1;
+        if (partnerCanGive) {
           //try to match
           let myInd = myBadge.cards.findIndex((a) => a.number === theirBadge.cards[j]!.number); //index of slot where we receive card
           if (

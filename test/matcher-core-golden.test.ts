@@ -78,9 +78,15 @@ function refCompareCards(
     while (myState < 2) {
       let foundMatch = false;
       for (let j = 0; j < theirBadge.maxCards; j++) {
-        // Partner retain-one: the partner keeps at least one copy of any card
-        // they give (tradability unknown -> owned count), for every partner.
-        if (theirBadge.cards[j]!.count > 0 && (theirBadge.cards[j]!.tradableCount ?? theirBadge.cards[j]!.count) > 1) {
+        // Partner give condition (openspec change selfish-trade-matching):
+        // ANY-mode partners give on ownership alone, even their last copy;
+        // fair partners keep the retain-one rule (tradability unknown ->
+        // owned count).
+        const partnerGives = theirBadge.cards[j]!;
+        const partnerCanGive = isMatchEverything(index)
+          ? partnerGives.count > 0
+          : partnerGives.count > 0 && (partnerGives.tradableCount ?? partnerGives.count) > 1;
+        if (partnerCanGive) {
           const myInd = myBadge.cards.findIndex((a) => a.number === theirBadge.cards[j]!.number);
           if (
             (myState === 0 && myBadge.cards[myInd]!.count < myBadge.maxSets) ||

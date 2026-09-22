@@ -114,13 +114,35 @@ describe("computeMatches", () => {
     assert.equal(cardCount(any.itemsToReceive), 1);
   });
 
-  it("never takes an ANY-mode partner's last copy", () => {
-    // Partner owns exactly one copy of the card we need: even an ANY-mode bot
-    // must retain it, so no swap proposes taking it.
+  it("takes an ANY-mode partner's last copy", () => {
+    // Selfish ANY-mode rule: the partner only needs to own the card we need -
+    // even their last copy can be taken.
     const mine = [badge(100, [0, 0, 0, 2])];
     const theirs = [badge(100, [0, 0, 1, 0])];
     const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
-    assert.deepEqual(result, { itemsToSend: [], itemsToReceive: [] });
+    assert.deepEqual(sideShape(result.itemsToSend), ["100-hash-3x1"]);
+    assert.deepEqual(sideShape(result.itemsToReceive), ["100-hash-2x1"]);
+  });
+
+  it("takes an ANY-mode partner's only copy of a needed card (spec §20 selfish bot)", () => {
+    // Ours [A:1,B:2,C:0,D:1,E:1]; partner owns only the needed C:1.
+    // Expected: exactly B -> C, although the partner is left with zero C.
+    const mine = [badge(100, [1, 2, 0, 1, 1])];
+    const theirs = [badge(100, [0, 0, 1, 0, 0])];
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
+    assert.deepEqual(sideShape(result.itemsToSend), ["100-hash-1x1"]);
+    assert.deepEqual(sideShape(result.itemsToReceive), ["100-hash-2x1"]);
+  });
+
+  it("accepts an ANY-mode partner ending with duplicates (spec §20 selfish bot with duplicate)", () => {
+    // Ours [A:1,B:2,C:0,D:1,E:1]; partner B:2, C:1.
+    // Expected: B -> C still proposed although the partner ends with three B
+    // and zero C.
+    const mine = [badge(100, [1, 2, 0, 1, 1])];
+    const theirs = [badge(100, [0, 2, 1, 0, 0])];
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
+    assert.deepEqual(sideShape(result.itemsToSend), ["100-hash-1x1"]);
+    assert.deepEqual(sideShape(result.itemsToReceive), ["100-hash-2x1"]);
   });
 
   it("never takes a fair partner's last copy", () => {

@@ -13,14 +13,16 @@ against ASF bot lists and friends and generates trade offers: set progress
 and requests use owned copies (an already-owned card is never requested),
 offers are capped at tradable copies in excess of the applicable set target
 (surplus = `max(tradable − target, 0)` — the retained copies are never
-spent), partners are only asked for cards they can spare while keeping at
-least one copy, badges reach bot checks only when a receivable slot and
+spent), fair partners are only asked for cards they can spare while keeping at
+least one copy (and only take badge-neutral swaps), while any-cards (ANY-mode)
+partners are treated as pure card sources — they only need to own the card
+(`owned > 0`), even their last copy — badges reach bot checks only when a receivable slot and
 tradable surplus both exist, and a game missing from the tradability lookup
 treats every owned copy as tradable. Candidate badge details
 resolve from the single bundled card dataset and a browser card cache first; covered games need
 no badge-detail request at all on the first run — cards render with bundled
 titles and artwork. Badge-detail requests run serially (never parallel) and
-only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.3`, new home
+only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.4`, new home
 `https://github.com/jcarloscandela/ASF-STM-Enhancement`.
 
 ## Layout
