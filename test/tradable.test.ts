@@ -32,7 +32,7 @@ import {
   resolveBadgeEntry,
   writeBadgeCardCacheEntry,
 } from "../src/lib/dataset";
-import { computeMatches } from "../src/lib/matcher-core";
+import { computeMatches, type MatchBadge, type MatchCard } from "../src/lib/matcher-core";
 import type { StorageLike } from "../src/lib/storage";
 
 function fakeStorage(seed: Record<string, string> = {}): StorageLike {
@@ -349,19 +349,33 @@ describe("buildScanEligibility", () => {
     assert.equal(result[753]?.unbalanced, true);
   });
 
-  it("includes a badge whose only tradable copy misses the remaining cards", () => {
-    // One tradable duplicate plus missing (possibly held) cards can still
-    // complete a set, so the badge must reach matching.
+  it("excludes a badge that owns a single card with nothing to offer", () => {
+    // Owning exactly one tradable copy of one card leaves no surplus above the
+    // retained target, so the badge can never trade and must not be checked.
     const result = buildScanEligibility({ 753: cards({ A: [1, 1] }) }, db);
+    assert.equal(result[753]?.unbalanced, false);
+  });
+
+  it("excludes a badge whose only duplicate is the last tradable copy", () => {
+    // Reported scenario: five owned copies of Card A of which one is tradable,
+    // plus a held copy of Card D. The single tradable copy is the retained one
+    // (surplus = 0), so there is nothing to offer and no swap is possible -
+    // the badge must not reach partner checks.
+    const result = buildScanEligibility({ 753: cards({ A: [5, 1], D: [1, 0] }) }, db);
+    assert.equal(result[753]?.unbalanced, false);
+  });
+
+  it("includes a badge with a fully tradable duplicate and gaps", () => {
+    // Two tradable copies of Card A (one surplus above the retained copy) plus
+    // missing cards: a receivable slot and an offerable slot both exist.
+    const result = buildScanEligibility({ 753: cards({ A: [2, 2], B: [1, 1] }) }, db);
     assert.equal(result[753]?.unbalanced, true);
   });
 
-  it("includes badges whose duplicates are owned-but-held alongside a tradable copy", () => {
-    // Reported scenario: five owned copies of Card A of which one is
-    // tradable, plus a held copy of Card D - the badge can still be matched
-    // (exactly one swap), so it must stay a candidate.
-    const result = buildScanEligibility({ 753: cards({ A: [5, 1], D: [1, 0] }) }, db);
-    assert.equal(result[753]?.unbalanced, true);
+  it("excludes an all-held badge even when duplicated", () => {
+    // Duplicates exist but every copy is trade-held: no offerable slot.
+    const result = buildScanEligibility({ 753: cards({ A: [5, 0], B: [1, 0] }) }, db);
+    assert.equal(result[753]?.unbalanced, false);
   });
 
   it("excludes a badge with no tradable copies at all", () => {
@@ -372,6 +386,70 @@ describe("buildScanEligibility", () => {
   it("skips games absent from the badges database", () => {
     const result = buildScanEligibility({ 12345: cards({ A: [5, 5] }) }, db);
     assert.deepEqual(result, {});
+  });
+
+  it("agrees with the matcher on the same badge (gate/matcher parity)", () => {
+    // Builds the matcher's view of one badge from the same inventory card
+    // data the gate consumes, then checks both agree: a badge the gate
+    // excludes yields no swap even with a generous partner, and a badge the
+    // gate includes yields at least one swap.
+    function matchBadge(entry: Record<string, InventoryCardData>, size: number): MatchBadge {
+      const hashes = Object.keys(entry);
+      const cards: MatchCard[] = hashes.map((hash, index) => ({
+        item: hash,
+        hash,
+        count: entry[hash]!.owned,
+        tradableCount: entry[hash]!.tradable,
+        iconUrl: "",
+        number: index,
+      }));
+      for (let i = hashes.length; i < size; i++) {
+        cards.push({ item: `slot-${i}`, hash: `slot-${i}`, count: 0, tradableCount: 0, iconUrl: "", number: i });
+      }
+      cards.sort((a, b) => b.count - a.count);
+      const total = cards.reduce((sum, card) => sum + card.count, 0);
+      return {
+        appId: 753,
+        title: "Game",
+        maxCards: size,
+        maxSets: Math.floor(total / size),
+        lastSet: Math.ceil(total / size),
+        cards,
+      };
+    }
+    function generousPartner(size: number): MatchBadge {
+      return {
+        appId: 753,
+        title: "Game",
+        maxCards: size,
+        maxSets: 2,
+        lastSet: 2,
+        cards: Array.from({ length: size }, (_, index) => ({
+          item: `p-${index}`,
+          hash: `p-${index}`,
+          count: 2,
+          iconUrl: "",
+          number: index,
+        })),
+      };
+    }
+    const sendCount = (badge: MatchBadge): number =>
+      computeMatches([badge], [generousPartner(badge.maxCards)], 0, {
+        debugPrint: () => {},
+        isMatchEverything: () => true,
+      })
+        .itemsToSend.flatMap((item) => item.cards)
+        .reduce((sum, card) => sum + card.count, 0);
+
+    // Excluded: the only duplicate is the last tradable copy -> no swap possible.
+    const excludedEntry = cards({ A: [5, 1], D: [1, 0] });
+    assert.equal(buildScanEligibility({ 753: excludedEntry }, db)[753]?.unbalanced, false);
+    assert.equal(sendCount(matchBadge(excludedEntry, 5)), 0, "gate excludes => matcher proposes nothing");
+
+    // Included: two tradable copies of A -> one surplus above the retained copy.
+    const includedEntry = cards({ A: [5, 2], D: [1, 0] });
+    assert.equal(buildScanEligibility({ 753: includedEntry }, db)[753]?.unbalanced, true);
+    assert.ok(sendCount(matchBadge(includedEntry, 5)) >= 1, "gate includes => matcher proposes at least one swap");
   });
 });
 
@@ -637,13 +715,20 @@ describe("buildBadgeFromCardList", () => {
   });
 
   it("derives badges the matcher can consume (reported scenario)", () => {
-    // Five owned copies of Card A of which one is tradable, one held Card D,
-    // missing B/C/E: the derived badge must yield exactly one swap for a
-    // missing card and never request the owned Card D.
+    // Five owned copies of Card A of which two are tradable (one surplus above
+    // the retained copy), one held Card D, missing B/C/E: the derived badge
+    // must yield exactly one swap for a missing card and never request the
+    // owned Card D.
     const cardList = ["Game - Card A", "Game - Card B", "Game - Card C", "Game - Card D", "Game - Card E"].map(
       (hash) => ({ hash }),
     );
-    const badge = buildBadgeFromCardList(440, "Game 440", 5, cardList, cardCounts);
+    const twoTradable: InventoryCardCounts = {
+      440: {
+        ...cardCounts[440],
+        "Game - Card A": cardEntry(5, 2),
+      },
+    };
+    const badge = buildBadgeFromCardList(440, "Game 440", 5, cardList, twoTradable);
     assert.ok(badge);
     badge.cards.sort((a, b) => b.count - a.count);
     const total = badge.cards.reduce((sum, card) => sum + card.count, 0);
@@ -668,7 +753,7 @@ describe("buildBadgeFromCardList", () => {
     );
     assert.ok(theirs);
     const result = computeMatches([badge], [theirs], 0, { debugPrint: () => {}, isMatchEverything: () => true });
-    assert.equal(result.itemsToSend.length, 1, "exactly one swap: only one tradable copy");
+    assert.equal(result.itemsToSend.length, 1, "exactly one swap: one surplus copy above the retained one");
     const received = result.itemsToReceive.flatMap((item) => item.cards.map((card) => card.hash));
     assert.ok(!received.includes("Game - Card D"), "owned card D must never be requested");
     assert.ok(

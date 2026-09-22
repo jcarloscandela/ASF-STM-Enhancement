@@ -11,12 +11,16 @@ ASF bot-list trade matcher for Steam Community badges, shipped as a
 single-file TypeScript userscript. The scanner matches the user's cards
 against ASF bot lists and friends and generates trade offers: set progress
 and requests use owned copies (an already-owned card is never requested),
-offers are capped by currently tradable copies, and a game missing from the
-tradability lookup treats every owned copy as tradable. Candidate badge details
+offers are capped at tradable copies in excess of the applicable set target
+(surplus = `max(tradable − target, 0)` — the retained copies are never
+spent), partners are only asked for cards they can spare while keeping at
+least one copy, badges reach bot checks only when a receivable slot and
+tradable surplus both exist, and a game missing from the tradability lookup
+treats every owned copy as tradable. Candidate badge details
 resolve from the single bundled card dataset and a browser card cache first; covered games need
 no badge-detail request at all on the first run — cards render with bundled
 titles and artwork. Badge-detail requests run serially (never parallel) and
-only for games whose card data is not yet known. Version `1.0.0`, new home
+only for games whose card data is not yet known. Version `1.0.2`, new home
 `https://github.com/jcarloscandela/ASF-STM-Enhancement`.
 
 ## Layout

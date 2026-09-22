@@ -487,7 +487,11 @@ declare const unsafeWindow: any;
       }
       //add filter
       let checkBox = document.getElementById("astm_" + appId) as HTMLInputElement | null;
-      const filterUpdate = planFilterUpdate(checkBox === null, checkBox?.checked ?? true);
+      // `planFilterUpdate` expects checkbox EXISTENCE (contract: !exists ->
+      // addedToFilter), so pass `checkBox !== null`; with the argument
+      // corrected, the missing-checkbox path only ever takes the add branch
+      // below and can no longer reach the `checkBox.parentElement` read.
+      const filterUpdate = planFilterUpdate(checkBox !== null, checkBox?.checked ?? true);
       let display = filterUpdate.display;
       if (filterUpdate.addedToFilter) {
         let newFilter = `<span style="margin-right: 15px; white-space: nowrap; display: inline-block;"><input type="checkbox" id="astm_${appId}" checked="" /><label for="astm_${appId}" data-count="1">${gameName} <b>(1)</b></label></span>`;

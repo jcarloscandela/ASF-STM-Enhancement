@@ -329,9 +329,18 @@ export function buildInventoryCardCounts(inventoryData: InventoryData): Inventor
 }
 
 // Maps derived inventory card data onto the badges database: only games present
-// in the database get an entry, each flagged `unbalanced` when the owned copies
-// are unevenly distributed (i.e. the badge is worth matching) and at least one
-// copy is currently tradable (an all-held surplus can never be offered).
+// in the database get an entry, each flagged `unbalanced` (the scanner's
+// eligibility boolean) when a swap could exist for some partner - i.e. the
+// badge has at least one receivable slot (owned below the applicable set
+// target) AND at least one offerable slot (currently tradable copies above
+// that target, surplus = max(tradable - target, 0) > 0). Targets mirror the
+// badge page and the matcher: maxSets = floor(total / size),
+// lastSet = ceil(total / size); badge state 0 trades against maxSets, state 1
+// against lastSet (state 2 - nothing to do - is never eligible). Cards absent
+// from the inventory count as owned 0 (missing cards count as zero owned
+// copies). Tradability unknown reaches this gate as tradable == owned
+// (badge-page fallback upstream), so the surplus rule then degrades to
+// owned - target.
 export function buildScanEligibility(
   inventoryCardCounts: InventoryCardCounts,
   badgeCardData: Record<string, BadgeCardInfo>,
@@ -353,7 +362,7 @@ export function buildScanEligibility(
     };
   }
 
-  /* Check for unbalanced appIds */
+  /* Check which appIds can actually trade (receivable slot + tradable surplus) */
   for (const appId in scanResult) {
     const entry = scanResult[appId];
     if (!entry) {
@@ -362,18 +371,22 @@ export function buildScanEligibility(
     const { data, max_size } = entry;
 
     const cards = Object.values(data);
-    const owned = cards.reduce((acc, card) => acc + card.owned, 0);
-    const size = cards.length;
+    const total = cards.reduce((acc, card) => acc + card.owned, 0);
+    const maxSets = Math.floor(total / max_size);
+    const lastSet = Math.ceil(total / max_size);
 
-    const min = Math.floor(owned / max_size);
-    const max = Math.ceil(owned / max_size);
+    // min/max owned counts across all `max_size` slots of the set (absent
+    // cards contribute 0), mirroring the matcher's sorted-badge state rule.
+    const missingSlots = max_size > cards.length ? max_size - cards.length : 0;
+    const min = missingSlots > 0 ? 0 : cards.reduce((m, card) => Math.min(m, card.owned), Number.POSITIVE_INFINITY);
+    const max = cards.reduce((m, card) => Math.max(m, card.owned), 0);
+    const state = min !== maxSets ? 0 : max === lastSet ? 2 : 1;
 
-    const unbalanced = cards.some((card) => card.owned !== min && card.owned !== max) || size < max_size;
+    const target = state === 0 ? maxSets : lastSet;
+    const receivable = (missingSlots > 0 && target > 0) || cards.some((card) => card.owned < target);
+    const offerable = cards.some((card) => card.tradable > target);
 
-    // A badge is only worth matching while at least one copy can actually be
-    // offered: an all-held badge has surplus but no tradable capacity.
-    const hasTradable = cards.some((card) => card.tradable > 0);
-    entry.unbalanced = unbalanced && hasTradable;
+    entry.unbalanced = state !== 2 && receivable && offerable;
   }
 
   return scanResult;

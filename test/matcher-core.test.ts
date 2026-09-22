@@ -91,15 +91,19 @@ describe("computeMatches", () => {
   });
 
   it("proposes an evening trade when a fair swap helps both sides", () => {
-    // We hold two spare slot-3 copies; the bot needs one and holds a spare slot-2.
-    const result = computeMatches([badge(100, [0, 0, 0, 2])], [badge(100, [0, 0, 1, 0])], 0, deps());
+    // We hold two spare slot-3 copies; the bot needs one and holds two slot-2
+    // copies (retaining one after the swap - partners never part with their
+    // last copy).
+    const result = computeMatches([badge(100, [0, 0, 0, 2])], [badge(100, [0, 0, 2, 0])], 0, deps());
     assert.deepEqual(sideShape(result.itemsToSend), ["100-hash-3x1"]);
     assert.deepEqual(sideShape(result.itemsToReceive), ["100-hash-2x1"]);
   });
 
   it("rejects an unfair-to-bot swap that an ANY bot accepts", () => {
+    // Partner holds two copies of both slots so the retain-one rule lets the
+    // ANY-mode swap through while the fair-bot fairness check still declines it.
     const mine = [badge(100, [0, 0, 0, 2])];
-    const theirs = [badge(100, [0, 0, 1, 1])];
+    const theirs = [badge(100, [0, 0, 2, 2])];
 
     const fair = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => false }));
     const any = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
@@ -110,9 +114,27 @@ describe("computeMatches", () => {
     assert.equal(cardCount(any.itemsToReceive), 1);
   });
 
+  it("never takes an ANY-mode partner's last copy", () => {
+    // Partner owns exactly one copy of the card we need: even an ANY-mode bot
+    // must retain it, so no swap proposes taking it.
+    const mine = [badge(100, [0, 0, 0, 2])];
+    const theirs = [badge(100, [0, 0, 1, 0])];
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
+    assert.deepEqual(result, { itemsToSend: [], itemsToReceive: [] });
+  });
+
+  it("never takes a fair partner's last copy", () => {
+    // The fairness check alone would allow this swap (the partner gains a card
+    // they do not own); the retain-one rule must reject it regardless of mode.
+    const mine = [badge(100, [0, 0, 0, 2])];
+    const theirs = [badge(100, [0, 0, 1, 0])];
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => false }));
+    assert.deepEqual(result, { itemsToSend: [], itemsToReceive: [] });
+  });
+
   it("keeps offered and requested counts balanced per game", () => {
     const mine = [badge(440, [4, 1, 1, 1]), badge(570, [0, 3, 2, 1])];
-    const theirs = [badge(440, [1, 1, 1, 4]), badge(570, [2, 0, 1, 1])];
+    const theirs = [badge(440, [2, 1, 1, 4]), badge(570, [2, 0, 1, 1])];
     const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
 
     assert.ok(cardCount(result.itemsToSend) > 0, "fixture must produce a match");
@@ -147,23 +169,41 @@ describe("computeMatches", () => {
     assert.deepEqual(sideShape(result.itemsToReceive), ["440-hash-1x1", "440-hash-2x1", "440-hash-4x1"]);
   });
 
-  it("offers only the tradable copies when the rest are held", () => {
-    // User: card 0 x5 but only one copy currently tradable (four held),
-    // card 3 x1 held; the rest missing. Only one copy can leave the account,
-    // so exactly one swap is proposed and the owned card 3 is not requested.
+  it("never offers the last tradable copy (strict surplus)", () => {
+    // Strict surplus (openspec change audit-badge-trade-selection): a card is
+    // offerable only while its tradable copies exceed the retained set target.
+    // Five owned copies of card 0 but only one currently tradable: the single
+    // tradable copy is the retained copy (surplus = 0), so NO swap is
+    // proposed - and the owned-but-held card 3 is never requested either.
     const mine = [badge(440, [5, 0, 0, 1, 0], [1, 0, 0, 0, 0])];
     const theirs = [badge(440, [0, 2, 2, 2, 2])];
-    const result = computeMatches(mine, theirs, 0, deps());
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
+    assert.deepEqual(result, { itemsToSend: [], itemsToReceive: [] });
+  });
+
+  it("offers exactly the surplus above the retained copy when part of it is held", () => {
+    // User: card 0 owned x4 of which two are held (tradable = 2, surplus = 1
+    // above the retained copy), single copies of cards 1 and 2, cards 3 and 4
+    // missing. Exactly one swap spends the single surplus copy; the remaining
+    // tradable copy is the retained one and never offered.
+    const mine = [badge(440, [4, 1, 1, 0, 0], [2, 1, 1, 0, 0])];
+    const theirs = [badge(440, [0, 2, 2, 2, 2])];
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
 
     assert.deepEqual(sideShape(result.itemsToSend), ["440-hash-0x1"]);
-    assert.equal(result.itemsToReceive.length, 1);
-    assert.equal(cardCount(result.itemsToReceive), 1);
-    const received = sideShape(result.itemsToReceive);
-    assert.ok(!received.some((entry) => entry.startsWith("440-hash-3")), "owned card 3 requested");
-    assert.ok(
-      received.every((entry) => /^440-hash-(1|2|4)x1$/.test(entry)),
-      `swap must request a missing card, got ${received.join(", ")}`,
-    );
+    assert.deepEqual(sideShape(result.itemsToReceive), ["440-hash-3x1"]);
+  });
+
+  it("fallback capacity equals owned copies above the target when no tradable counts exist", () => {
+    // Badge-page fallback: no tradableCount arrays, so tradable = owned and the
+    // surplus rule reduces to owned - target (state 1 target = lastSet = 2 for
+    // [4,1,1,1]), i.e. exactly two offers of card 0 before the badge evens out.
+    const mine = [badge(440, [4, 1, 1, 1])];
+    const theirs = [badge(440, [2, 2, 2, 4])];
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
+
+    assert.deepEqual(sideShape(result.itemsToSend), ["440-hash-0x2"]);
+    assert.deepEqual(sideShape(result.itemsToReceive), ["440-hash-1x1", "440-hash-3x1"]);
   });
 
   it("treats missing tradableCount as fully tradable owned copies", () => {
@@ -188,15 +228,17 @@ describe("computeMatches", () => {
     // Mirrors the scanner (src/ASF-STM.ts): badges whose sorted owned counts
     // span less than 2 are dropped, and maxSets/lastSet are derived from the
     // owned counts. Scenario (b)'s owned counts [5,0,0,1,0] span 5, so the
-    // badge survives and still yields exactly one swap.
+    // badge survives the owned-count filter - but under the strict surplus its
+    // single tradable copy is the retained copy, so the matcher itself yields
+    // no swap (the eligibility gate excludes this badge before matching).
     const mine = badge(440, [5, 0, 0, 1, 0], [1, 0, 0, 0, 0]);
     const span = mine.cards[0]!.count - mine.cards[mine.cards.length - 1]!.count;
     assert.ok(span >= 2, "badge must survive the nothing-to-match filter");
     assert.equal(mine.maxSets, 1);
     assert.equal(mine.lastSet, 2);
     const result = computeMatches([mine], [badge(440, [0, 2, 2, 2, 2])], 0, deps());
-    assert.equal(cardCount(result.itemsToSend), 1);
-    assert.equal(cardCount(result.itemsToReceive), 1);
+    assert.equal(cardCount(result.itemsToSend), 0, "no surplus above the retained copy");
+    assert.equal(cardCount(result.itemsToReceive), 0);
   });
 
   it("keeps held cards out for fair bots while capping offers at tradable capacity", () => {
@@ -216,9 +258,10 @@ describe("computeMatches", () => {
     // Multi-swap accounting: sends decrement owned+tradable, receives increment
     // both — yet a received card can never satisfy a later give check, because
     // receives only happen below the set target while gives require surplus
-    // above it. Every sent copy here is Card A within its tradable capacity.
+    // above it. Every sent copy here is Card A within its tradable capacity,
+    // and the partner holds two copies of every card it gives (retain-one).
     const mine = [badge(7, [4, 0, 0], [4, 0, 0])];
-    const theirs = [badge(7, [0, 1, 3])];
+    const theirs = [badge(7, [0, 2, 3])];
     const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
 
     assert.deepEqual(sideShape(result.itemsToSend), ["7-hash-0x2"]);

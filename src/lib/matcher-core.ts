@@ -4,12 +4,14 @@
 // debug printer, bot flag lookup, and persistence callback, so this module is
 // unit-testable with plain fixtures and stays bundled single-file.
 //
-// Counting semantics (openspec change fix-matcher-tradable-counts): owned
-// copies (`count`) drive the badge state and the need checks, so a card the
-// user already owns is never requested; currently tradable copies
-// (`tradableCount`, falling back to `count` when unknown) cap how many copies
-// each slot can offer. This intentionally diverges from the pre-extraction
-// userscript behavior for badges with trade-held copies.
+// Counting semantics (openspec changes fix-matcher-tradable-counts and
+// audit-badge-trade-selection): owned copies (`count`) drive the badge state
+// and the need checks, so a card the user already owns is never requested;
+// currently tradable copies (`tradableCount`, falling back to `count` when
+// unknown) cap how many copies each slot can offer, and a slot is only
+// offerable while its tradable remainder exceeds the applicable set target -
+// the retained copies (one per slot for a first set, `maxSets`/`lastSet` for
+// later sets) are never spent, even when further owned copies are held.
 
 import type { MatchCard, MatchBadge, MatchCardRef, MatchItem } from "./models";
 
@@ -92,7 +94,11 @@ export function computeMatches(
       let foundMatch = false;
       for (let j = 0; j < theirBadge.maxCards; j++) {
         //index of card they give
-        if (theirBadge.cards[j]!.count > 0) {
+        // Partner retain-one (openspec change audit-badge-trade-selection):
+        // a partner only gives a card while they keep at least one copy.
+        // Their tradability is unknown (no tradableCount on partner badges),
+        // so the owned count applies - for every partner, ANY-mode included.
+        if (theirBadge.cards[j]!.count > 0 && (theirBadge.cards[j]!.tradableCount ?? theirBadge.cards[j]!.count) > 1) {
           //try to match
           let myInd = myBadge.cards.findIndex((a) => a.number === theirBadge.cards[j]!.number); //index of slot where we receive card
           if (
@@ -107,10 +113,13 @@ export function computeMatches(
               debugPrint("i=" + i + " j=" + j + " k=" + k + " myState=" + myState);
               debugPrint("we have this: " + myBadge.cards[k]!.item + " (" + myBadge.cards[k]!.count + ")");
               if (
-                ((myState === 0 && myBadge.cards[k]!.count > myBadge.maxSets) ||
-                  (myState === 1 && myBadge.cards[k]!.count > myBadge.lastSet)) &&
-                myBadge.cards[k]!.tradableRemaining > 0
+                (myState === 0 && myBadge.cards[k]!.tradableRemaining > myBadge.maxSets) ||
+                (myState === 1 && myBadge.cards[k]!.tradableRemaining > myBadge.lastSet)
               ) {
+                // Strict surplus (openspec change audit-badge-trade-selection):
+                // tradable copies must exceed the applicable set target, so the
+                // retained copies are never spent - held owned copies beyond
+                // them do not create offer capacity.
                 //that's fine for us
                 debugPrint("it's a good trade for us");
                 let theirInd = theirBadge.cards.findIndex((a) => a.number === myBadge.cards[k]!.number); //index of slot where they will receive card

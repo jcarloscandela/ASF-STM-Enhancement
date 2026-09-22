@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 // Unit tests for the match-row view-data builders (src/lib/match-row.ts).
 // Slice 2.4 of modularize-userscript-services: behavior must replay the
 // inline `addMatchRow` decisions exactly, plus a golden snapshot of one full
@@ -16,6 +17,7 @@ import {
   defaultBotAvatarHash,
   planFilterUpdate,
   populateCardsHtml,
+  type FilterUpdate,
 } from "../src/lib/match-row";
 import { renderRow } from "../src/templates/rowTemplate";
 import { getPartner } from "../src/lib/helpers";
@@ -66,6 +68,87 @@ describe("planFilterUpdate", () => {
 
   it("hides the row for unchecked badges without re-adding", () => {
     assert.deepEqual(planFilterUpdate(true, false), { display: "none", addedToFilter: false });
+  });
+});
+
+// Wiring seam of `addMatchRow` (src/ASF-STM.ts): the pure-helper tests above
+// hand-author `checkboxExists`, which is exactly how the inversion that caused
+// the null-parentElement crash slipped through. These tests derive existence
+// from element presence via getElementById - the way the call site does - and
+// assert the reconciliation outcomes, so flipping the argument's polarity
+// (back to `checkBox === null`) fails them.
+describe("filter widget wiring seam (addMatchRow pattern)", () => {
+  const APP_ID = 753;
+
+  function mountWidget(): HTMLElement {
+    document.body.innerHTML = "";
+    const widget = document.createElement("div");
+    widget.id = "asf_stm_filters_body";
+    document.body.appendChild(widget);
+    return widget;
+  }
+
+  /** The call-site markup: a span holding the checkbox and its labeled count. */
+  function mountExistingEntry(widget: HTMLElement, checked: boolean): void {
+    const span = document.createElement("span");
+    span.innerHTML = `<input type="checkbox" id="astm_${APP_ID}" ${checked ? "checked" : ""} /><label for="astm_${APP_ID}" data-count="1">Game <b>(1)</b></label>`;
+    widget.appendChild(span);
+  }
+
+  /** Mirrors src/ASF-STM.ts: derive existence from element presence, then plan. */
+  function planLikeCallSite(appId: number): FilterUpdate {
+    const checkBox = document.getElementById(`astm_${appId}`) as HTMLInputElement | null;
+    return planFilterUpdate(checkBox !== null, checkBox?.checked ?? true);
+  }
+
+  it("missing checkbox: adds the entry and shows the row", () => {
+    mountWidget();
+    assert.deepEqual(planLikeCallSite(APP_ID), { display: "inline-block", addedToFilter: true });
+  });
+
+  it("existing checked checkbox: not re-added, row stays visible", () => {
+    const widget = mountWidget();
+    mountExistingEntry(widget, true);
+    assert.deepEqual(planLikeCallSite(APP_ID), { display: "inline-block", addedToFilter: false });
+  });
+
+  it("existing unchecked checkbox: not re-added, row is hidden", () => {
+    const widget = mountWidget();
+    mountExistingEntry(widget, false);
+    assert.deepEqual(planLikeCallSite(APP_ID), { display: "none", addedToFilter: false });
+  });
+
+  it("repeated reconciliations keep one checkbox/label and one filter entry while the count grows", () => {
+    // Mirrors the full addMatchRow filter-widget block: plan from the DOM,
+    // add+persist once, then only increment the displayed count.
+    const widget = mountWidget();
+    const filter: number[] = [];
+    function reconcile(): FilterUpdate {
+      const update = planLikeCallSite(APP_ID);
+      if (update.addedToFilter) {
+        mountExistingEntry(widget, true);
+        filter.push(APP_ID);
+      } else {
+        const checkBox = document.getElementById(`astm_${APP_ID}`) as HTMLInputElement;
+        const label = checkBox.parentElement!.querySelector("label") as HTMLElement;
+        label.dataset.count = String(parseInt(label.dataset.count ?? "") + 1);
+      }
+      return update;
+    }
+
+    // First match adds the entry (count 1, checked, visible)...
+    assert.deepEqual(reconcile(), { display: "inline-block", addedToFilter: true });
+    // ...later matches only count, honoring the checked state.
+    assert.deepEqual(reconcile(), { display: "inline-block", addedToFilter: false });
+    assert.deepEqual(reconcile(), { display: "inline-block", addedToFilter: false });
+
+    assert.equal(widget.querySelectorAll("input").length, 1, "exactly one checkbox");
+    assert.equal(widget.querySelectorAll("label").length, 1, "exactly one label");
+    assert.equal(document.querySelectorAll(`#astm_${APP_ID}`).length, 1, "no duplicate element ids");
+    assert.deepEqual(filter, [APP_ID], "persisted filter holds the appid exactly once");
+    const label = widget.querySelector("label")!;
+    assert.equal(label.dataset.count, "3", "displayed match count incremented per render");
+    assert.equal((widget.querySelector("input") as HTMLInputElement).checked, true, "checked state preserved");
   });
 });
 
