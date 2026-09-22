@@ -28,7 +28,13 @@ import {
   planFilterUpdate,
   populateCardsHtml,
 } from "./lib/match-row";
-import { getRandomOfferIndex, isOneToOneTrade, planOfferSelection, type OfferPoolItem } from "./lib/offer-writer";
+import {
+  formatShortfallMessage,
+  getRandomOfferIndex,
+  isOneToOneTrade,
+  planOfferSelection,
+  type OfferPoolItem,
+} from "./lib/offer-writer";
 import {
   buildRateLimitFailFastError,
   classifySteamError,
@@ -62,6 +68,7 @@ import {
   textToArray,
 } from "./lib/helpers";
 import { readJson, STORAGE_KEYS, writeJson } from "./lib/storage";
+import { clearBotCache, loadBotCache, saveBotCache } from "./lib/bot-cache";
 import { gmGet, resolveRequestFunction, retryDelay } from "./lib/requests";
 import type { GmRequestFunction, GmRequestResponse, ModernGmApi } from "./lib/requests";
 import type {
@@ -1586,6 +1593,11 @@ declare const unsafeWindow: any;
   function stopButtonEvent(): void {
     (document.querySelector("#asf_stm_stop_div") as HTMLElement).hidden = true;
     stop = true;
+    // Post-trade rescans must not match against pre-trade bot inventories:
+    // drop the bot cache (both layers) so the next scan refetches the
+    // listing. Settings, blacklist, badge cards, and params survive Stop.
+    bots = null;
+    clearBotCache(localStorage);
     Object.values(progressRadials).map((x) => {
       x.textElement!.textContent = "❌";
     });
@@ -1840,7 +1852,6 @@ declare const unsafeWindow: any;
             bots = {
               friends: true,
               Success: true,
-              cacheTime: Date.now(),
               Result: profile.map((profileLink, index) => ({
                 SteamIDText: profileLink,
                 AvatarHash: avatarHash[index]!,
@@ -1859,7 +1870,6 @@ declare const unsafeWindow: any;
             let re = /("SteamID":)(\d+)/g;
             let fixedJson = (response.response ?? response.responseText).replace(re, '$1"$2"'); //because fuck js
             bots = JSON.parse(fixedJson);
-            bots!.cacheTime = Date.now();
             bots!.friends = false;
           }
           if (bots!.Success) {
@@ -1867,7 +1877,7 @@ declare const unsafeWindow: any;
             // https://github.com/JustArchiNET/ArchiSteamFarm/wiki/Configuration#matchabletypes
             bots!.Result = bots!.Result.filter((bot) => bot.MatchableTypes.find((x) => x === 5));
             debugPrint("found total " + bots!.Result.length + " bots");
-            writeJson(localStorage, STORAGE_KEYS.botCache, bots);
+            saveBotCache(localStorage, bots!, Date.now());
             buttonPressedEvent(pendingPlan);
           } else {
             //ASF backend does not indicate success
@@ -1937,15 +1947,8 @@ declare const unsafeWindow: any;
 
     debugPrint(profileRegex);
 
-    let botCache = readJson<BotsResponse | null>(localStorage, STORAGE_KEYS.botCache, null);
-    if (
-      botCache === null ||
-      botCache.cacheTime === undefined ||
-      botCache.cacheTime === null ||
-      botCache.cacheTime + botCacheTime < Date.now() ||
-      globalSettings.matchFriends !== botCache.friends
-    ) {
-      botCache = null;
+    const botCache = loadBotCache(localStorage, Date.now(), botCacheTime, globalSettings.matchFriends);
+    if (botCache === null) {
       debugPrint("Bot cache invalidated");
     } else {
       bots = botCache;
@@ -2041,17 +2044,21 @@ declare const unsafeWindow: any;
         return Object.values(live.rgInventory) as OfferPoolItem[];
       });
       const plan = planOfferSelection(g_v.Cards, pools, g_s.order, getRandomOfferIndex);
+      if (plan.failLater || plan.shortfalls.length > 0) {
+        const detail = formatShortfallMessage(plan.shortfalls);
+        debugPrint("unsupplied cards: " + JSON.stringify(plan.shortfalls));
+        unsafeWindow.ShowAlertDialog("Items missing", detail);
+        throw "Cards missing";
+      }
       plan.moves.forEach(function (sideMoves) {
         sideMoves.forEach(function (move) {
           unsafeWindow.MoveItemToTrade(move.element);
         });
       });
-      const failLater = plan.failLater;
 
       if (
-        failLater ||
         document.querySelectorAll("#your_slots .has_item").length !==
-          document.querySelectorAll("#their_slots .has_item").length
+        document.querySelectorAll("#their_slots .has_item").length
       ) {
         unsafeWindow.ShowAlertDialog(
           "Items missing",
@@ -2124,6 +2131,12 @@ declare const unsafeWindow: any;
           // no matter what happens, restore old cookie
           restoreCookie(g_v.oldCookie);
           debugPrint(e);
+          // "Cards missing" already produced its own specific dialog inside
+          // addCards (named shortfall cards, or the slot-mismatch fallback):
+          // a second dialog blaming the Params key would misattribute it.
+          if (e === "Cards missing") {
+            return;
+          }
           // Loud failure: the handoff resolved but items could not be
           // selected (e.g. inventory not matching). Never fail silently.
           try {

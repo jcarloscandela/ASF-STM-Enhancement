@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 
 import {
   assessTradeReadiness,
+  formatShortfallMessage,
   isOneToOneTrade,
   planOfferSelection,
   type OfferPoolItem,
@@ -101,6 +102,51 @@ describe("offer selection applied to a canned trade page", () => {
     applyMoves([yours, theirs], plan.moves);
     assert.equal(yours.querySelectorAll(".has_item").length, 0);
     assert.equal(theirs.querySelectorAll(".has_item").length, 1);
+  });
+
+  it("applies zero moves and names the cards when the user pool is short (6v6 repro)", () => {
+    // Reported case: balanced 6-vs-6 handoff, user inventory supplies only 4.
+    // addCards gates moves on shortfalls, so the offer stays empty and the
+    // dialog names the missing cards instead of blaming the Params key.
+    const requested: [string[], string[]] = [
+      ["A1", "A2", "A3", "A4", "A5", "A6"],
+      ["B1", "B2", "B3", "B4", "B5", "B6"],
+    ];
+    assert.equal(requested[0].length, requested[1].length);
+    const plan = planOfferSelection(
+      requested,
+      [
+        [poolItem("A1", "1"), poolItem("A2", "2"), poolItem("A3", "3"), poolItem("A4", "4")],
+        [
+          poolItem("B1", "11"),
+          poolItem("B2", "12"),
+          poolItem("B3", "13"),
+          poolItem("B4", "14"),
+          poolItem("B5", "15"),
+          poolItem("B6", "16"),
+        ],
+      ],
+      "AS_IS",
+    );
+    assert.equal(plan.failLater, true);
+    assert.deepEqual(plan.shortfalls, [
+      { side: 0, name: "A5", reason: "absent" },
+      { side: 0, name: "A6", reason: "absent" },
+    ]);
+    // Gated application mirrors the reordered addCards: no moves on shortfall.
+    const { yours, theirs } = tradePage();
+    const dialogs: Array<[string, string]> = [];
+    if (plan.failLater || plan.shortfalls.length > 0) {
+      dialogs.push(["Items missing", formatShortfallMessage(plan.shortfalls)]);
+    } else {
+      applyMoves([yours, theirs], plan.moves);
+    }
+    assert.equal(yours.querySelectorAll(".has_item").length, 0);
+    assert.equal(theirs.querySelectorAll(".has_item").length, 0);
+    assert.equal(dialogs.length, 1);
+    assert.match(dialogs[0]![1], /yours: A5 \(not in inventory\)/);
+    assert.match(dialogs[0]![1], /yours: A6 \(not in inventory\)/);
+    assert.doesNotMatch(dialogs[0]![1], /TempAsfStm\.ASF\.STM\.Params/);
   });
 });
 

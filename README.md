@@ -81,4 +81,4 @@ CI (`.github/workflows/build.yml`) runs typecheck, lint, tests, and build on pus
 
 ### Versioning and releases
 
-The single version source is `package.json` (`1.0.5`). The build injects it into the userscript header, so the shipped file, package metadata, and the release tag always agree. Bumping the version on the default branch (`master`) runs the full pipeline and drafts a GitHub release named `ASF-STM-Enhancement V<version>` carrying the single distributable.
+The single version source is `package.json` (`1.0.7`). The build injects it into the userscript header, so the shipped file, package metadata, and the release tag always agree. Bumping the version on the default branch (`master`) runs the full pipeline and drafts a GitHub release named `ASF-STM-Enhancement V<version>` carrying the single distributable.

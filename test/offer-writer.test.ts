@@ -9,7 +9,13 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
 
-import { isOneToOneTrade, planOfferSelection, sortOfferCopiesDesc, type OfferPoolItem } from "../src/lib/offer-writer";
+import {
+  formatShortfallMessage,
+  isOneToOneTrade,
+  planOfferSelection,
+  sortOfferCopiesDesc,
+  type OfferPoolItem,
+} from "../src/lib/offer-writer";
 
 function poolItem(name: string, id: string, type = "Trading Card"): OfferPoolItem {
   return {
@@ -92,10 +98,75 @@ describe("planOfferSelection", () => {
   it("ignores pool items nobody requested", () => {
     const plan = planOfferSelection([["Card A"], []], [[poolItem("Card A", "9"), poolItem("Other", "3")], []], "AS_IS");
     assert.equal(plan.failLater, false);
+    assert.deepEqual(plan.shortfalls, []);
     assert.deepEqual(
       plan.moves[0].map((m) => m.id),
       ["9"],
     );
+  });
+
+  it("records absent names with the requesting side", () => {
+    const plan = planOfferSelection(
+      [["Ghost"], ["Phantom"]],
+      [[poolItem("Card A", "9")], [poolItem("Card B", "7")]],
+      "AS_IS",
+    );
+    assert.equal(plan.failLater, true);
+    assert.deepEqual(plan.shortfalls, [
+      { side: 0, name: "Ghost", reason: "absent" },
+      { side: 1, name: "Phantom", reason: "absent" },
+    ]);
+  });
+
+  it("records fully-held names as unselectable", () => {
+    const held = { ...poolItem("Card A", "9"), tradable: false as const };
+    const plan = planOfferSelection([["Card A"], []], [[held], []], "AS_IS");
+    assert.equal(plan.failLater, true);
+    assert.deepEqual(plan.shortfalls, [{ side: 0, name: "Card A", reason: "unselectable" }]);
+  });
+
+  it("records the second occurrence of a single copy as unselectable", () => {
+    const plan = planOfferSelection([["Card A", "Card A"], []], [[poolItem("Card A", "9")], []], "AS_IS");
+    assert.equal(plan.failLater, true);
+    assert.deepEqual(
+      plan.moves[0].map((m) => m.id),
+      ["9"],
+    );
+    assert.deepEqual(plan.shortfalls, [{ side: 0, name: "Card A", reason: "unselectable" }]);
+  });
+
+  it("leaves shortfalls empty on a clean plan", () => {
+    const plan = planOfferSelection(
+      [["Card A"], ["Card B"]],
+      [[poolItem("Card A", "11")], [poolItem("Card B", "7")]],
+      "AS_IS",
+    );
+    assert.equal(plan.failLater, false);
+    assert.deepEqual(plan.shortfalls, []);
+  });
+});
+
+describe("formatShortfallMessage", () => {
+  it("names each card with side and reason", () => {
+    const message = formatShortfallMessage([
+      { side: 0, name: "Ghost", reason: "absent" },
+      { side: 1, name: "Held Card", reason: "unselectable" },
+    ]);
+    assert.match(message, /yours: Ghost \(not in inventory\)/);
+    assert.match(message, /theirs: Held Card \(present but not tradable right now\)/);
+    assert.match(message, /No items were added/);
+    assert.doesNotMatch(message, /TempAsfStm\.ASF\.STM\.Params/);
+  });
+
+  it("caps long lists with a more-tail", () => {
+    const shortfalls = Array.from({ length: 12 }, (_, index) => ({
+      side: 0 as const,
+      name: `Card ${index}`,
+      reason: "absent" as const,
+    }));
+    const message = formatShortfallMessage(shortfalls, 10);
+    assert.match(message, /\+2 more/);
+    assert.doesNotMatch(message, /Card 11/);
   });
 });
 

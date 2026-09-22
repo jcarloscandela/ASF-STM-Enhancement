@@ -26,11 +26,27 @@ export interface PlannedMove {
   element: unknown;
 }
 
+/** One requested card occurrence the live inventory could not supply. */
+export interface UnsuppliedCard {
+  /** 0 = user's (send) side, 1 = partner's (receive) side. */
+  side: 0 | 1;
+  /** Requested `market_hash_name`. */
+  name: string;
+  /**
+   * `absent` = no pool item carries that name; `unselectable` = the name is
+   * present but every copy is trade-held/untradable (or already consumed by
+   * an earlier requested occurrence).
+   */
+  reason: "absent" | "unselectable";
+}
+
 /** Planned moves per side plus the abort bookkeeping `addCards` uses. */
 export interface OfferSelectionPlan {
   moves: [PlannedMove[], PlannedMove[]];
   failLater: boolean;
   cardTypes: [string[], string[]];
+  /** One entry per requested occurrence with no selectable copy, in request order. */
+  shortfalls: UnsuppliedCard[];
 }
 
 /** Random index in `[min, max)`, mirroring the inline `getRandomInt`. */
@@ -48,7 +64,8 @@ export function sortOfferCopiesDesc(copies: Array<{ id: string }>): void {
  * tradable pool copy — first (SORT: highest id) or random (RANDOM) — and flag
  * `failLater` when a name has no selectable copy. Held copies
  * (trade-state negative or future "Tradable After") are skipped, so a fully
- * held name falls through to the missing-items abort downstream.
+ * held name falls through to the missing-items abort downstream. Every such
+ * occurrence is also recorded in `shortfalls` with its side and reason.
  */
 export function planOfferSelection(
   requested: [string[], string[]],
@@ -58,8 +75,10 @@ export function planOfferSelection(
 ): OfferSelectionPlan {
   const moves: [PlannedMove[], PlannedMove[]] = [[], []];
   const cardTypes: [string[], string[]] = [[], []];
+  const shortfalls: UnsuppliedCard[] = [];
   let failLater = false;
   requested.forEach(function (requestedCards: string[], i: number) {
+    const side = (i === 0 ? 0 : 1) as 0 | 1;
     const pool = pools[i] ?? [];
     const tmpCards: Record<string, Array<{ type: string; element: unknown; id: string }>> = {};
     for (const item of pool) {
@@ -87,6 +106,8 @@ export function planOfferSelection(
       const currentCards = tmpCards[elem] || []; // all cards from inventory with requested signature
       if (currentCards.length === 0) {
         failLater = true;
+        const present = pool.some((item) => item.market_hash_name === elem);
+        shortfalls.push({ side, name: elem, reason: present ? "unselectable" : "absent" });
       } else {
         let pick = 0;
         if (order === "RANDOM") {
@@ -100,9 +121,30 @@ export function planOfferSelection(
       }
     });
   });
-  return { moves, failLater, cardTypes };
+  return { moves, failLater, cardTypes, shortfalls };
 }
 
+/**
+ * Renders the live-inventory shortfall dialog body: one line per unsupplied
+ * card (`your`/`their` side, name, reason), capped at `cap` entries with a
+ * `+N more` tail (the full list belongs in the debug log). Pure, so harness
+ * tests can assert dialog content without a browser dialog.
+ */
+export function formatShortfallMessage(shortfalls: UnsuppliedCard[], cap = 10): string {
+  const lines = shortfalls.slice(0, cap).map((entry) => {
+    const side = entry.side === 0 ? "yours" : "theirs";
+    const reason = entry.reason === "absent" ? "not in inventory" : "present but not tradable right now";
+    return `${side}: ${entry.name} (${reason})`;
+  });
+  if (shortfalls.length > cap) {
+    lines.push(`+${shortfalls.length - cap} more (see debug log)`);
+  }
+  return (
+    "The live trade inventory could not supply these matched cards:\n" +
+    lines.join("\n") +
+    "\nNo items were added. Check trade holds or inventory changes, then rescan."
+  );
+}
 /**
  * Minimal structural view of a trade-page user (own + partner) for the
  * readiness poll: mirrors `user.rgContexts[753][6].inventory` and
