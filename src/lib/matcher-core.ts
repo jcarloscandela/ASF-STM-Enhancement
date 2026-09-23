@@ -4,14 +4,16 @@
 // debug printer, bot flag lookup, and persistence callback, so this module is
 // unit-testable with plain fixtures and stays bundled single-file.
 //
-// Counting semantics (openspec changes fix-matcher-tradable-counts and
-// audit-badge-trade-selection): owned copies (`count`) drive the badge state
-// and the need checks, so a card the user already owns is never requested;
-// currently tradable copies (`tradableCount`, falling back to `count` when
-// unknown) cap how many copies each slot can offer, and a slot is only
-// offerable while its tradable remainder exceeds the applicable set target -
-// the retained copies (one per slot for a first set, `maxSets`/`lastSet` for
-// later sets) are never spent, even when further owned copies are held.
+// Counting semantics (openspec change fix-blocked-tradable-offer-sizing):
+// owned copies (`count`) drive the badge state and the need checks, so a card
+// the user already owns is never requested; the give check retains owned
+// copies and caps at tradable ones - a slot is offerable only while it owns
+// more than the applicable set target (`count`) AND holds at least one
+// currently tradable copy (`tradableRemaining`), i.e. the offerable surplus
+// is `max(min(tradable, owned - target), 0)`. The retained owned copies (one
+// per slot for a first set, `maxSets`/`lastSet` for later sets) are never
+// spent, while a tradable copy above them is offerable even when every other
+// owned copy is held.
 
 import type { MatchCard, MatchBadge, MatchCardRef, MatchItem } from "./models";
 
@@ -119,13 +121,17 @@ export function computeMatches(
               debugPrint("i=" + i + " j=" + j + " k=" + k + " myState=" + myState);
               debugPrint("we have this: " + myBadge.cards[k]!.item + " (" + myBadge.cards[k]!.count + ")");
               if (
-                (myState === 0 && myBadge.cards[k]!.tradableRemaining > myBadge.maxSets) ||
-                (myState === 1 && myBadge.cards[k]!.tradableRemaining > myBadge.lastSet)
+                (myState === 0 &&
+                  myBadge.cards[k]!.count > myBadge.maxSets &&
+                  myBadge.cards[k]!.tradableRemaining > 0) ||
+                (myState === 1 && myBadge.cards[k]!.count > myBadge.lastSet && myBadge.cards[k]!.tradableRemaining > 0)
               ) {
-                // Strict surplus (openspec change audit-badge-trade-selection):
-                // tradable copies must exceed the applicable set target, so the
-                // retained copies are never spent - held owned copies beyond
-                // them do not create offer capacity.
+                // Retained-owned surplus (openspec change
+                // fix-blocked-tradable-offer-sizing): the slot must own more
+                // than the applicable set target (the retained owned copies
+                // are never spent) and still hold a currently-tradable copy
+                // to send - held owned copies beyond the retained count keep
+                // set progress but never create offer capacity by themselves.
                 //that's fine for us
                 debugPrint("it's a good trade for us");
                 let theirInd = theirBadge.cards.findIndex((a) => a.number === myBadge.cards[k]!.number); //index of slot where they will receive card
@@ -384,4 +390,149 @@ export function resolveTradeCards(
     throw new Error("nothing to add, exiting");
   }
   return [send, receive];
+}
+
+// ---------------------------------------------------------------------------
+// Empty-offer diagnosis (openspec change fix-empty-trade-offer-selection).
+//
+// Best-effort, never-throwing snapshot of why a trade-setup abort left both
+// sides empty. Computed at offer time only; never persisted. The trade page
+// formats it into the `trade setup` dialog alongside the Params-key pointer.
+// ---------------------------------------------------------------------------
+
+/** Structured cause snapshot for one `trade setup` (handoff-data) abort. */
+export interface TradeHandoffDiagnosis {
+  /** Fixed stage label separating handoff-data failures from live-inventory ones. */
+  stage: "trade setup";
+  /** Original abort message (`missing url parameter`, `no matches ...`, ...). */
+  cause: string;
+  /** Partner storage keys tried, most specific first. */
+  partnerKeysTried: string[];
+  /** Resolved appid filter, or [] when `match` itself was invalid. */
+  resolvedFilter: number[];
+  /** Filter appids that had a match entry for this partner. */
+  matchedAppids: number[];
+  /** Filter appids with no match entry for this partner. */
+  missingAppids: number[];
+  /** Stored card ids that decoded to no market-hash name. */
+  skippedCardIds: number[];
+  /** Decodable send/receive card counts after skipping unknowns. */
+  sendCount: number;
+  receiveCount: number;
+}
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+function safePartnerKeys(partnerParam: string, truncate: (id: string) => string): string[] {
+  try {
+    return tradePartnerKeyCandidates(partnerParam, truncate);
+  } catch {
+    return [partnerParam];
+  }
+}
+
+/**
+ * Snapshots a `trade setup` abort without throwing. Every step is guarded so
+ * a corrupt store still yields counts instead of a second exception: an
+ * unresolvable `match` param gives an empty filter, an unknown partner gives
+ * no match map, and unknown card ids are counted as skipped.
+ */
+export function diagnoseTradeHandoff(args: {
+  partnerParam: string;
+  truncate: (id: string) => string;
+  matchParam: string | undefined;
+  filter: TradePageStore["filter"];
+  matches: TradePageStore["matches"];
+  cardNames: string[];
+  cause: unknown;
+}): TradeHandoffDiagnosis {
+  const { partnerParam, truncate, matchParam, filter, matches, cardNames, cause } = args;
+  const partnerKeysTried = safePartnerKeys(partnerParam, truncate);
+  let resolvedFilter: number[] = [];
+  try {
+    resolvedFilter = resolveTradeFilter(matchParam, filter);
+  } catch {
+    resolvedFilter = [];
+  }
+  let partnerMatches: Record<string, StoredMatchCards> | undefined;
+  try {
+    partnerMatches = resolvePartnerMatches(matches, partnerParam, truncate);
+  } catch {
+    partnerMatches = undefined;
+  }
+  const matchedAppids: number[] = [];
+  const missingAppids: number[] = [];
+  const skippedCardIds: number[] = [];
+  let sendCount = 0;
+  let receiveCount = 0;
+  if (partnerMatches !== undefined) {
+    for (const appId of resolvedFilter) {
+      const entry = partnerMatches[appId];
+      if (entry === undefined) {
+        missingAppids.push(appId);
+        continue;
+      }
+      matchedAppids.push(appId);
+      for (const card of entry.send) {
+        if (decodeStoredCardName(cardNames, card) === undefined) {
+          skippedCardIds.push(card);
+        } else {
+          sendCount += 1;
+        }
+      }
+      for (const card of entry.receive) {
+        if (decodeStoredCardName(cardNames, card) === undefined) {
+          skippedCardIds.push(card);
+        } else {
+          receiveCount += 1;
+        }
+      }
+    }
+  } else {
+    for (const appId of resolvedFilter) {
+      missingAppids.push(appId);
+    }
+  }
+  return {
+    stage: "trade setup",
+    cause: errorMessage(cause),
+    partnerKeysTried,
+    resolvedFilter,
+    matchedAppids,
+    missingAppids,
+    skippedCardIds,
+    sendCount,
+    receiveCount,
+  };
+}
+
+function cappedList(values: number[], cap = 10): string {
+  if (values.length === 0) {
+    return "none";
+  }
+  const shown = values.slice(0, cap).join(", ");
+  return values.length > cap ? `${shown} (+${values.length - cap} more)` : shown;
+}
+
+/**
+ * Renders the visible `trade setup` dialog body: one-line cause plus the
+ * counts needed to act (rescan vs stale Params vs bug report), capped lists
+ * with the remainder in the debug log, the Params-key pointer, and the
+ * explicit empty-offer sentence. Pure, so harness tests can assert it.
+ */
+export function formatTradeSetupMessage(diagnosis: TradeHandoffDiagnosis, cap = 10): string {
+  const lines = [
+    `Stage: ${diagnosis.stage} (${diagnosis.cause}).`,
+    `Partner keys tried: ${diagnosis.partnerKeysTried.join(", ") || "none"}.`,
+    `Filter appids: ${cappedList(diagnosis.resolvedFilter, cap)} ` +
+      `(${diagnosis.matchedAppids.length} with matches, ${diagnosis.missingAppids.length} without).`,
+    `Missing appids: ${cappedList(diagnosis.missingAppids, cap)}.`,
+    `Skipped unknown card ids: ${diagnosis.skippedCardIds.length}.`,
+    `Cards: ${diagnosis.sendCount} to send / ${diagnosis.receiveCount} to receive.`,
+    "No items were added. Open DevTools console and check localStorage key",
+    "TempAsfStm.ASF.STM.Params (matches/filter/cardNames).",
+  ];
+  return lines.join("\n");
 }

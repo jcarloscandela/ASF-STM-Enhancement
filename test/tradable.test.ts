@@ -356,12 +356,36 @@ describe("buildScanEligibility", () => {
     assert.equal(result[753]?.unbalanced, false);
   });
 
-  it("excludes a badge whose only duplicate is the last tradable copy", () => {
-    // Reported scenario: five owned copies of Card A of which one is tradable,
-    // plus a held copy of Card D. The single tradable copy is the retained one
-    // (surplus = 0), so there is nothing to offer and no swap is possible -
-    // the badge must not reach partner checks.
+  it("excludes a badge whose only tradable copy is also its only owned copy", () => {
+    // Narrowed last-tradable-copy case: every slot sits at or below the
+    // retained target, so no owned surplus exists above it - the badge can
+    // never trade and must not reach partner checks, even with tradable
+    // copies present.
+    const result = buildScanEligibility({ 753: cards({ A: [1, 1], B: [1, 1], C: [0, 0] }) }, db);
+    assert.equal(result[753]?.unbalanced, false);
+  });
+
+  it("includes a badge whose only surplus above the retained owned count is tradable", () => {
+    // Retained-owned rule: five owned copies of Card A of which one is
+    // tradable plus a held copy of Card D. The retained owned copy is covered
+    // by the held copies, so the single tradable copy is offerable and the
+    // badge must reach partner checks.
     const result = buildScanEligibility({ 753: cards({ A: [5, 1], D: [1, 0] }) }, db);
+    assert.equal(result[753]?.unbalanced, true);
+  });
+
+  it("includes the reported 4xA/3-held badge with its single tradable copy", () => {
+    // Four owned copies of Card A of which three are held (tradable = 1,
+    // first-set target = 1) with every other slot missing: one receivable
+    // slot and one offerable copy both exist.
+    const result = buildScanEligibility({ 753: cards({ A: [4, 1] }) }, db);
+    assert.equal(result[753]?.unbalanced, true);
+  });
+
+  it("excludes a badge with no owned surplus even when its copies are tradable", () => {
+    // Owning exactly one copy of one card leaves no owned surplus above the
+    // retained target, so the badge can never trade and must not be checked.
+    const result = buildScanEligibility({ 753: cards({ A: [1, 1] }) }, db);
     assert.equal(result[753]?.unbalanced, false);
   });
 
@@ -441,8 +465,8 @@ describe("buildScanEligibility", () => {
         .itemsToSend.flatMap((item) => item.cards)
         .reduce((sum, card) => sum + card.count, 0);
 
-    // Excluded: the only duplicate is the last tradable copy -> no swap possible.
-    const excludedEntry = cards({ A: [5, 1], D: [1, 0] });
+    // Excluded: every copy is trade-held -> no swap possible.
+    const excludedEntry = cards({ A: [5, 0], D: [1, 0] });
     assert.equal(buildScanEligibility({ 753: excludedEntry }, db)[753]?.unbalanced, false);
     assert.equal(sendCount(matchBadge(excludedEntry, 5)), 0, "gate excludes => matcher proposes nothing");
 
@@ -715,10 +739,10 @@ describe("buildBadgeFromCardList", () => {
   });
 
   it("derives badges the matcher can consume (reported scenario)", () => {
-    // Five owned copies of Card A of which two are tradable (one surplus above
-    // the retained copy), one held Card D, missing B/C/E: the derived badge
-    // must yield exactly one swap for a missing card and never request the
-    // owned Card D.
+    // Five owned copies of Card A of which two are tradable (an owned surplus
+    // of four above the retained copy, capped at two tradable), one held Card
+    // D, missing B/C/E: the derived badge must yield exactly two swaps for
+    // missing cards and never request the owned Card D.
     const cardList = ["Game - Card A", "Game - Card B", "Game - Card C", "Game - Card D", "Game - Card E"].map(
       (hash) => ({ hash }),
     );
@@ -753,7 +777,8 @@ describe("buildBadgeFromCardList", () => {
     );
     assert.ok(theirs);
     const result = computeMatches([badge], [theirs], 0, { debugPrint: () => {}, isMatchEverything: () => true });
-    assert.equal(result.itemsToSend.length, 1, "exactly one swap: one surplus copy above the retained one");
+    const sentCopies = result.itemsToSend.flatMap((item) => item.cards).reduce((sum, card) => sum + card.count, 0);
+    assert.equal(sentCopies, 2, "both tradable copies above the retained owned one");
     const received = result.itemsToReceive.flatMap((item) => item.cards.map((card) => card.hash));
     assert.ok(!received.includes("Game - Card D"), "owned card D must never be requested");
     assert.ok(

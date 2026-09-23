@@ -19,6 +19,8 @@ import {
   type OfferPoolItem,
   type TradeReadinessUser,
 } from "../src/lib/offer-writer";
+import { getPartner } from "../src/lib/helpers";
+import { diagnoseTradeHandoff, formatTradeSetupMessage, resolveTradeCards } from "../src/lib/matcher-core";
 
 function poolItem(name: string, id: string, tradable: boolean | 0 = true): OfferPoolItem {
   return {
@@ -146,6 +148,70 @@ describe("offer selection applied to a canned trade page", () => {
     assert.equal(dialogs.length, 1);
     assert.match(dialogs[0]![1], /yours: A5 \(not in inventory\)/);
     assert.match(dialogs[0]![1], /yours: A6 \(not in inventory\)/);
+    assert.doesNotMatch(dialogs[0]![1], /TempAsfStm\.ASF\.STM\.Params/);
+  });
+});
+
+describe("empty-offer wiring", () => {
+  it("renders a trade-setup dialog with diagnosis and moves nothing on handoff failure", () => {
+    const cardNames = [encodeURIComponent("Game A-Card 1")];
+    const moveCalls: unknown[] = [];
+    const dialogs: Array<[string, string]> = [];
+    let cause = "";
+    try {
+      resolveTradeCards({}, [999], cardNames);
+    } catch (e) {
+      cause = e instanceof Error ? e.message : String(e);
+      const diagnosis = diagnoseTradeHandoff({
+        partnerParam: "99999999",
+        truncate: getPartner,
+        matchParam: "all",
+        filter: [999],
+        matches: {},
+        cardNames,
+        cause: e,
+      });
+      dialogs.push([
+        "ASF-STM trade setup failed",
+        "Could not prepare the trade offer.\n" + formatTradeSetupMessage(diagnosis),
+      ]);
+    }
+    assert.match(cause, /nothing to add/);
+    assert.equal(moveCalls.length, 0);
+    assert.equal(dialogs.length, 1);
+    assert.match(dialogs[0]![1], /Stage: trade setup/);
+    assert.match(dialogs[0]![1], /Cards: 0 to send \/ 0 to receive/);
+    assert.match(dialogs[0]![1], /No items were added/);
+    assert.match(dialogs[0]![1], /TempAsfStm\.ASF\.STM\.Params/);
+    const { yours, theirs } = tradePage();
+    assert.equal(yours.querySelectorAll(".has_item").length, 0);
+    assert.equal(theirs.querySelectorAll(".has_item").length, 0);
+  });
+
+  it("vetoes a non-1:1 trade before moving anything", () => {
+    const { yours, theirs } = tradePage();
+    const plan = planOfferSelection(
+      [["Card A"], ["Card B"]],
+      [[poolItem("Card A", "1")], [{ ...poolItem("Card B", "3"), type: "Foil Trading Card" }]],
+      "AS_IS",
+    );
+    assert.equal(plan.failLater, false);
+    assert.equal(isOneToOneTrade(plan.cardTypes), false);
+    // Mirrors the reordered addCards: the veto fires before MoveItemToTrade.
+    const moveCalls: unknown[] = [];
+    const dialogs: Array<[string, string]> = [];
+    if (plan.failLater || plan.shortfalls.length > 0) {
+      dialogs.push(["Items missing", formatShortfallMessage(plan.shortfalls)]);
+    } else if (!isOneToOneTrade(plan.cardTypes)) {
+      dialogs.push(["Not 1:1 trade", "This is not a valid 1:1 trade. No items were added. Script aborting."]);
+    } else {
+      applyMoves([yours, theirs], plan.moves);
+    }
+    assert.equal(moveCalls.length, 0);
+    assert.equal(yours.querySelectorAll(".has_item").length, 0);
+    assert.equal(theirs.querySelectorAll(".has_item").length, 0);
+    assert.equal(dialogs.length, 1);
+    assert.match(dialogs[0]![1], /No items were added/);
     assert.doesNotMatch(dialogs[0]![1], /TempAsfStm\.ASF\.STM\.Params/);
   });
 });

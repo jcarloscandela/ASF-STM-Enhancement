@@ -191,29 +191,56 @@ describe("computeMatches", () => {
     assert.deepEqual(sideShape(result.itemsToReceive), ["440-hash-1x1", "440-hash-2x1", "440-hash-4x1"]);
   });
 
-  it("never offers the last tradable copy (strict surplus)", () => {
-    // Strict surplus (openspec change audit-badge-trade-selection): a card is
-    // offerable only while its tradable copies exceed the retained set target.
-    // Five owned copies of card 0 but only one currently tradable: the single
-    // tradable copy is the retained copy (surplus = 0), so NO swap is
-    // proposed - and the owned-but-held card 3 is never requested either.
+  it("offers the last tradable copy when held copies cover the retained owned one", () => {
+    // Retained-owned surplus (openspec change fix-blocked-tradable-offer-sizing):
+    // a card is offerable while it owns more than the retained set target and
+    // still holds a tradable copy. Five owned copies of card 0 but only one
+    // currently tradable: the retained owned copy stays covered by the four
+    // held copies, so exactly one swap offers the single tradable copy - and
+    // the owned-but-held card 3 is never requested either.
     const mine = [badge(440, [5, 0, 0, 1, 0], [1, 0, 0, 0, 0])];
     const theirs = [badge(440, [0, 2, 2, 2, 2])];
     const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
-    assert.deepEqual(result, { itemsToSend: [], itemsToReceive: [] });
+    assert.deepEqual(sideShape(result.itemsToSend), ["440-hash-0x1"]);
+    assert.deepEqual(sideShape(result.itemsToReceive), ["440-hash-1x1"]);
   });
 
-  it("offers exactly the surplus above the retained copy when part of it is held", () => {
-    // User: card 0 owned x4 of which two are held (tradable = 2, surplus = 1
-    // above the retained copy), single copies of cards 1 and 2, cards 3 and 4
-    // missing. Exactly one swap spends the single surplus copy; the remaining
-    // tradable copy is the retained one and never offered.
+  it("offers every tradable copy above the retained owned count", () => {
+    // User: card 0 owned x4 of which two are held (tradable = 2, owned surplus
+    // = 3 above the retained copy), single copies of cards 1 and 2, cards 3
+    // and 4 missing. Both tradable copies are offered across exactly two
+    // swaps; no held copy is ever sent.
     const mine = [badge(440, [4, 1, 1, 0, 0], [2, 1, 1, 0, 0])];
     const theirs = [badge(440, [0, 2, 2, 2, 2])];
     const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
 
+    assert.deepEqual(sideShape(result.itemsToSend), ["440-hash-0x2"]);
+    assert.deepEqual(sideShape(result.itemsToReceive), ["440-hash-3x1", "440-hash-4x1"]);
+  });
+
+  it("offers the single tradable copy above retained owned copies (reported 4xA, 3 held)", () => {
+    // Reported Zombie-game case: four owned copies of Card A of which three
+    // are temporarily held (tradable = 1, first-set target = 1). The retained
+    // owned copy stays covered by the held copies, so the single tradable
+    // copy is offerable: exactly one swap, and no held copy is ever sent.
+    const mine = [badge(440, [4, 0, 0, 0, 0], [1, 0, 0, 0, 0])];
+    const theirs = [badge(440, [1, 1, 1, 1, 1])];
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
+
     assert.deepEqual(sideShape(result.itemsToSend), ["440-hash-0x1"]);
-    assert.deepEqual(sideShape(result.itemsToReceive), ["440-hash-3x1"]);
+    assert.deepEqual(sideShape(result.itemsToReceive), ["440-hash-1x1"]);
+  });
+
+  it("offers both tradable copies above retained owned copies (reported 4xA, 2 held)", () => {
+    // Second reported case: four owned copies of Card A of which two are
+    // temporarily held (tradable = 2). Both tradable copies sit above the
+    // retained owned copy: exactly two swaps, and no held copy is ever sent.
+    const mine = [badge(440, [4, 0, 0, 0, 0], [2, 0, 0, 0, 0])];
+    const theirs = [badge(440, [1, 1, 1, 1, 1])];
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
+
+    assert.deepEqual(sideShape(result.itemsToSend), ["440-hash-0x2"]);
+    assert.deepEqual(sideShape(result.itemsToReceive), ["440-hash-1x1", "440-hash-2x1"]);
   });
 
   it("fallback capacity equals owned copies above the target when no tradable counts exist", () => {
@@ -246,21 +273,22 @@ describe("computeMatches", () => {
     assert.deepEqual(sideShape(withCapacity.itemsToReceive), sideShape(withoutCapacity.itemsToReceive));
   });
 
-  it("keeps a single-tradable-duplicate badge through the scanner's nothing-to-match filter", () => {
+  it("lets a single-tradable-duplicate badge through the scanner's nothing-to-match filter", () => {
     // Mirrors the scanner (src/ASF-STM.ts): badges whose sorted owned counts
     // span less than 2 are dropped, and maxSets/lastSet are derived from the
     // owned counts. Scenario (b)'s owned counts [5,0,0,1,0] span 5, so the
-    // badge survives the owned-count filter - but under the strict surplus its
-    // single tradable copy is the retained copy, so the matcher itself yields
-    // no swap (the eligibility gate excludes this badge before matching).
+    // badge survives the owned-count filter - and under the retained-owned
+    // surplus its single tradable copy sits above the held-covered retained
+    // copy, so the matcher yields exactly one swap (the eligibility gate
+    // includes this badge before matching).
     const mine = badge(440, [5, 0, 0, 1, 0], [1, 0, 0, 0, 0]);
     const span = mine.cards[0]!.count - mine.cards[mine.cards.length - 1]!.count;
     assert.ok(span >= 2, "badge must survive the nothing-to-match filter");
     assert.equal(mine.maxSets, 1);
     assert.equal(mine.lastSet, 2);
     const result = computeMatches([mine], [badge(440, [0, 2, 2, 2, 2])], 0, deps());
-    assert.equal(cardCount(result.itemsToSend), 0, "no surplus above the retained copy");
-    assert.equal(cardCount(result.itemsToReceive), 0);
+    assert.equal(cardCount(result.itemsToSend), 1, "one tradable copy above the retained owned one");
+    assert.equal(cardCount(result.itemsToReceive), 1);
   });
 
   it("keeps held cards out for fair bots while capping offers at tradable capacity", () => {

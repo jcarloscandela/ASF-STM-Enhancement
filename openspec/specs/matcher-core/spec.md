@@ -74,7 +74,7 @@ The system SHALL produce the same match sets as the current userscript for ident
 
 ### Requirement: Requests respect owned need and offers respect tradable capacity
 
-The pure matcher SHALL treat the user's per-card counts as two quantities: owned copies drive the badge state and the need checks (a card is requested only while its owned count is below the applicable set target), and currently tradable copies drive the give checks. A card SHALL be offered only while its currently tradable copies exceed the applicable set target — the offerable surplus is `max(tradable − target, 0)` — so the copies the badge must retain (one for first-set completion, `maxSets`/`lastSet` for later sets) are never spent, even when further owned copies exist only as held copies. A card whose tradable count does not exceed the target SHALL NOT be offered at all. Each proposed send SHALL decrement both the owned and the tradable count of the sent card, and each proposed receive SHALL increment both, so subsequent iterations of one planning pass reason about the post-trade state. When a card carries no tradable count, its tradable count SHALL equal its owned count before the surplus rule is applied. Badge state, bot-side fairness, per-game balance, and deterministic card ordering SHALL be unchanged.
+The pure matcher SHALL treat the user's per-card counts as two quantities: owned copies drive the badge state and the need checks (a card is requested only while its owned count is below the applicable set target), and owned surplus capped by tradable copies drives the give checks. A card SHALL be offered only while it owns more than the applicable set target (`owned > target`) AND at least one copy is currently tradable (`tradable ≥ 1`) — the offerable surplus is `max(min(tradable, owned − target), 0)` — so the copies the badge must retain (one for first-set completion, `maxSets`/`lastSet` for later sets) are never spent, while a tradable copy above the retained owned count is offerable even when every other owned copy is held. Each proposed send SHALL decrement both the owned and the tradable count of the sent card, and each proposed receive SHALL increment both, so subsequent iterations of one planning pass reason about the post-trade state. When a card carries no tradable count, its tradable count SHALL equal its owned count before the surplus rule is applied. Badge state, bot-side fairness, per-game balance, and deterministic card ordering SHALL be unchanged.
 
 #### Scenario: Never requests an owned card
 
@@ -83,8 +83,8 @@ The pure matcher SHALL treat the user's per-card counts as two quantities: owned
 
 #### Scenario: Offers stop at tradable capacity
 
-- **WHEN** the user owns five copies of one card of which only one is currently tradable, one held copy of a second card, and zero copies of the remaining cards, the applicable set target retains one copy, and the partner holds two copies of every card
-- **THEN** no swap is proposed at all: the single tradable copy is the retained copy (surplus = 0), so the offer capacity is zero, and the owned second card is not requested
+- **WHEN** the user owns five copies of one card of which only one is currently tradable (owned = 5, tradable = 1), one held copy of a second card, and zero copies of the remaining cards, the applicable set target retains one copy, and the partner holds two copies of every card
+- **THEN** exactly one swap is proposed, offering the single tradable copy while the retained owned copy stays covered by the held copies, and offers stop there: the owned second card is not requested and no further copy is offered once the tradable remainder is exhausted
 
 #### Scenario: Full capacity fills every missing card
 
@@ -93,8 +93,8 @@ The pure matcher SHALL treat the user's per-card counts as two quantities: owned
 
 #### Scenario: Partial surplus above the retained copy yields exactly that many swaps
 
-- **WHEN** the user owns four copies of one card of which two are temporarily held (tradable = 2, surplus = 1 above the retained copy), one copy each of two other cards, and zero copies of the remaining cards, and the partner holds two copies of every card
-- **THEN** exactly one swap is proposed, drawing on that card's single surplus copy, and the remaining tradable copy is never offered
+- **WHEN** the user owns four copies of one card of which two are temporarily held (owned = 4, tradable = 2, target = 1), one copy each of two other cards, and zero copies of the remaining cards, and the partner holds two copies of every card
+- **THEN** exactly two swaps are proposed, drawing on that card's two tradable copies, and no held copy is ever offered
 
 #### Scenario: Missing tradable count falls back to owned count
 

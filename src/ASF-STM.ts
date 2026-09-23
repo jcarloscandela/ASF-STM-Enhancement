@@ -14,6 +14,8 @@ import { parseInventoryAsset, parseInventoryDescription } from "./lib/steam-sche
 import {
   buildMatchStore,
   computeMatches,
+  diagnoseTradeHandoff,
+  formatTradeSetupMessage,
   resolvePartnerMatches,
   resolveTradeCards,
   resolveTradeFilter,
@@ -2050,6 +2052,17 @@ declare const unsafeWindow: any;
         unsafeWindow.ShowAlertDialog("Items missing", detail);
         throw "Cards missing";
       }
+
+      // Type parity is a live-inventory veto: check before moving anything so
+      // a non-1:1 trade leaves zero moves (empty offer, never partial).
+      if (!isOneToOneTrade(plan.cardTypes)) {
+        debugPrint("non-1:1 card types: " + JSON.stringify(plan.cardTypes));
+        unsafeWindow.ShowAlertDialog(
+          "Not 1:1 trade",
+          "This is not a valid 1:1 trade. No items were added. Script aborting.",
+        );
+        throw "Not 1:1 trade";
+      }
       plan.moves.forEach(function (sideMoves) {
         sideMoves.forEach(function (move) {
           unsafeWindow.MoveItemToTrade(move.element);
@@ -2062,15 +2075,9 @@ declare const unsafeWindow: any;
       ) {
         unsafeWindow.ShowAlertDialog(
           "Items missing",
-          "Some items are missing and were not added to trade offer. Script aborting.",
+          "Some items are missing and were not added to trade offer. No items were added. Script aborting.",
         );
         throw "Cards missing";
-      }
-
-      // check if item types match
-      if (!isOneToOneTrade(plan.cardTypes)) {
-        unsafeWindow.ShowAlertDialog("Not 1:1 trade", "This is not a valid 1:1 trade. Script aborting.");
-        throw "Not 1:1 trade";
       }
       restoreCookie(g_v.oldCookie);
       // inject some JS to do something after trade offer is sent
@@ -2131,10 +2138,11 @@ declare const unsafeWindow: any;
           // no matter what happens, restore old cookie
           restoreCookie(g_v.oldCookie);
           debugPrint(e);
-          // "Cards missing" already produced its own specific dialog inside
-          // addCards (named shortfall cards, or the slot-mismatch fallback):
-          // a second dialog blaming the Params key would misattribute it.
-          if (e === "Cards missing") {
+          // "Cards missing" and "Not 1:1 trade" already produced their own
+          // specific live-inventory dialogs inside addCards (named shortfall
+          // cards, the slot-mismatch fallback, or the 1:1 veto): a second
+          // dialog blaming the Params key would misattribute them.
+          if (e === "Cards missing" || e === "Not 1:1 trade") {
             return;
           }
           // Loud failure: the handoff resolved but items could not be
@@ -2169,10 +2177,16 @@ declare const unsafeWindow: any;
 
     ///// STM functions /////
 
+    // Hoisted so the `trade setup` catch below can diagnose the abort even
+    // when resolution failed part-way (best-effort: whatever resolved so far).
+    let handoffPartnerKey = "";
+    let handoffMatchParam: string | undefined;
+    let handoffParams: (TradeParams & { cardNames: string[] }) | undefined;
     try {
       if (window.location.href.includes("source=asfstm")) {
         LoadConfig();
         const params = LoadParams() as TradeParams & { cardNames: string[] };
+        handoffParams = params;
 
         let vars = getUrlVars();
 
@@ -2180,6 +2194,8 @@ declare const unsafeWindow: any;
         // match=all selects the persisted filter, match=<appid> one badge;
         // partner accepts raw, truncated, and twice-truncated keys.
         const partnerKey = vars.partner as string;
+        handoffPartnerKey = partnerKey;
+        handoffMatchParam = vars.match;
         debugPrint("trade partner keys tried: " + JSON.stringify(tradePartnerKeyCandidates(partnerKey, getPartner)));
         const filter = resolveTradeFilter(vars.match, params.filter);
         debugPrint("trade appid filter: " + JSON.stringify(filter));
@@ -2225,12 +2241,33 @@ declare const unsafeWindow: any;
       debugPrint(e);
       try {
         const message = e instanceof Error ? e.message : String(e);
-        unsafeWindow.ShowAlertDialog(
-          "ASF-STM trade setup failed",
-          "Could not prepare the trade offer: " +
+        let detail: string;
+        if (handoffParams !== undefined && handoffPartnerKey !== "") {
+          try {
+            const diagnosis = diagnoseTradeHandoff({
+              partnerParam: handoffPartnerKey,
+              truncate: getPartner,
+              matchParam: handoffMatchParam,
+              filter: handoffParams.filter,
+              matches: handoffParams.matches,
+              cardNames: handoffParams.cardNames,
+              cause: e,
+            });
+            debugPrint("trade setup diagnosis: " + JSON.stringify(diagnosis));
+            detail = "Could not prepare the trade offer.\n" + formatTradeSetupMessage(diagnosis);
+          } catch {
+            detail =
+              "Could not prepare the trade offer: " +
+              message +
+              ". No items were added. Open DevTools console and check localStorage key TempAsfStm.ASF.STM.Params (matches/filter/cardNames).";
+          }
+        } else {
+          detail =
+            "Could not prepare the trade offer: " +
             message +
-            ". Open DevTools console and check localStorage key TempAsfStm.ASF.STM.Params (matches/filter/cardNames).",
-        );
+            ". No items were added. Open DevTools console and check localStorage key TempAsfStm.ASF.STM.Params (matches/filter/cardNames).";
+        }
+        unsafeWindow.ShowAlertDialog("ASF-STM trade setup failed", detail);
       } catch {
         /* dialogs unavailable - debug log above is the fallback */
       }

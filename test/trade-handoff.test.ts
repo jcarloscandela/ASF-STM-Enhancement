@@ -15,6 +15,8 @@ import assert from "node:assert/strict";
 import { getPartner } from "../src/lib/helpers";
 import {
   decodeStoredCardName,
+  diagnoseTradeHandoff,
+  formatTradeSetupMessage,
   resolvePartnerMatches,
   resolveTradeCards,
   resolveTradeFilter,
@@ -131,5 +133,96 @@ describe("resolveTradeCards", () => {
 
   it("falls back to the raw name when decoding fails", () => {
     assert.equal(decodeStoredCardName(["100% broken"], 0), "100% broken");
+  });
+});
+
+describe("diagnoseTradeHandoff", () => {
+  it("names tried keys and empty filter presence for an unknown partner", () => {
+    const s = store();
+    const diagnosis = diagnoseTradeHandoff({
+      partnerParam: "99999999",
+      truncate: getPartner,
+      matchParam: "all",
+      filter: s.filter,
+      matches: s.matches,
+      cardNames: s.cardNames,
+      cause: new Error("no matches with this partner"),
+    });
+    assert.equal(diagnosis.stage, "trade setup");
+    assert.match(diagnosis.cause, /no matches with this partner/);
+    assert.ok(diagnosis.partnerKeysTried.includes("99999999"));
+    assert.deepEqual(diagnosis.resolvedFilter, [100, 200]);
+    assert.deepEqual(diagnosis.matchedAppids, []);
+    assert.deepEqual(diagnosis.missingAppids, [100, 200]);
+    assert.deepEqual(diagnosis.sendCount, 0);
+    assert.deepEqual(diagnosis.receiveCount, 0);
+  });
+
+  it("reports match=all with no overlapping appids as missing", () => {
+    const s = store();
+    const diagnosis = diagnoseTradeHandoff({
+      partnerParam: TRUNCATED,
+      truncate: getPartner,
+      matchParam: "all",
+      filter: [999],
+      matches: s.matches,
+      cardNames: s.cardNames,
+      cause: new Error("nothing to add, exiting"),
+    });
+    assert.deepEqual(diagnosis.resolvedFilter, [999]);
+    assert.deepEqual(diagnosis.matchedAppids, []);
+    assert.deepEqual(diagnosis.missingAppids, [999]);
+  });
+
+  it("counts every id as skipped when all ids are unknown", () => {
+    const s = store();
+    const diagnosis = diagnoseTradeHandoff({
+      partnerParam: TRUNCATED,
+      truncate: getPartner,
+      matchParam: "100",
+      filter: s.filter,
+      matches: { [TRUNCATED]: { "100": { send: [99], receive: [98] } } },
+      cardNames: s.cardNames,
+      cause: new Error("nothing to add, exiting"),
+    });
+    assert.deepEqual(diagnosis.matchedAppids, [100]);
+    assert.deepEqual(diagnosis.skippedCardIds, [99, 98]);
+    assert.deepEqual(diagnosis.sendCount, 0);
+    assert.deepEqual(diagnosis.receiveCount, 0);
+  });
+
+  it("reports unbalanced decodable counts", () => {
+    const s = store();
+    const diagnosis = diagnoseTradeHandoff({
+      partnerParam: TRUNCATED,
+      truncate: getPartner,
+      matchParam: "100",
+      filter: s.filter,
+      matches: { [TRUNCATED]: { "100": { send: [0, 1], receive: [1] } } },
+      cardNames: s.cardNames,
+      cause: new Error("Different items amount on both sides"),
+    });
+    assert.deepEqual(diagnosis.sendCount, 2);
+    assert.deepEqual(diagnosis.receiveCount, 1);
+  });
+
+  it("formats the setup message with stage, counts, Params key, and empty-offer sentence", () => {
+    const s = store();
+    const diagnosis = diagnoseTradeHandoff({
+      partnerParam: "99999999",
+      truncate: getPartner,
+      matchParam: "all",
+      filter: s.filter,
+      matches: s.matches,
+      cardNames: s.cardNames,
+      cause: new Error("no matches with this partner"),
+    });
+    const message = formatTradeSetupMessage(diagnosis);
+    assert.match(message, /Stage: trade setup/);
+    assert.match(message, /no matches with this partner/);
+    assert.match(message, /Partner keys tried:/);
+    assert.match(message, /Cards: 0 to send \/ 0 to receive/);
+    assert.match(message, /No items were added/);
+    assert.match(message, /TempAsfStm\.ASF\.STM\.Params/);
   });
 });

@@ -5,10 +5,11 @@
 // the owned/tradable counting semantics from openspec change
 // fix-matcher-tradable-counts applied: owned copies drive the badge state and
 // the need checks, and a per-slot tradable remainder caps offers (falling back
-// to the owned count when no tradable count is present), with the strict
-// surplus rule from openspec change audit-badge-trade-selection: a slot is
-// only offerable while its tradable remainder exceeds the applicable set
-// target, so retained copies are never spent. matcher-core must
+// to the owned count when no tradable count is present), with the
+// retained-owned rule from openspec change fix-blocked-tradable-offer-sizing:
+// a slot is only offerable while it owns more than the applicable set target
+// and still holds a currently-tradable copy, so retained owned copies are
+// never spent. matcher-core must
 // produce identical results across exhaustive small fixtures, so any later
 // "optimization" of the core is caught.
 
@@ -93,9 +94,14 @@ function refCompareCards(
             (myState === 1 && myBadge.cards[myInd]!.count < myBadge.lastSet)
           ) {
             for (let k = 0; k < myInd; k++) {
+              // Retained-owned surplus (fix-blocked-tradable-offer-sizing):
+              // the slot must own more than the set target and still hold a
+              // tradable copy to send.
               if (
-                (myState === 0 && myBadge.cards[k]!.tradableRemaining > myBadge.maxSets) ||
-                (myState === 1 && myBadge.cards[k]!.tradableRemaining > myBadge.lastSet)
+                (myState === 0 &&
+                  myBadge.cards[k]!.count > myBadge.maxSets &&
+                  myBadge.cards[k]!.tradableRemaining > 0) ||
+                (myState === 1 && myBadge.cards[k]!.count > myBadge.lastSet && myBadge.cards[k]!.tradableRemaining > 0)
               ) {
                 const theirInd = theirBadge.cards.findIndex((a) => a.number === myBadge.cards[k]!.number);
                 if (!isMatchEverything(index)) {
@@ -228,8 +234,9 @@ describe("matcher-core golden equivalence", () => {
         [0, 2, 2, 2, 2],
         [5, 0, 0, 0, 0],
       ],
-      // Reported scenario (b): only one surplus copy tradable - the single
-      // tradable copy is retained, so zero swaps (strict surplus).
+      // Reported scenario (b): only one copy tradable - the retained owned
+      // copy stays covered by the held copies, so the single tradable copy
+      // is offered (retained-owned surplus).
       [
         [5, 0, 0, 1, 0],
         [0, 2, 2, 2, 2],

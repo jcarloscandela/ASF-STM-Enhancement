@@ -144,6 +144,23 @@ describe("planOfferSelection", () => {
     assert.equal(plan.failLater, false);
     assert.deepEqual(plan.shortfalls, []);
   });
+
+  it("flags a fully-held pool on both sides with zero planned moves", () => {
+    const heldA = { ...poolItem("Card A", "9"), tradable: false as const };
+    const heldB = { ...poolItem("Card B", "7"), tradable: false as const };
+    const plan = planOfferSelection([["Card A"], ["Card B"]], [[heldA], [heldB]], "AS_IS");
+    assert.equal(plan.failLater, true);
+    assert.deepEqual(plan.shortfalls, [
+      { side: 0, name: "Card A", reason: "unselectable" },
+      { side: 1, name: "Card B", reason: "unselectable" },
+    ]);
+    assert.deepEqual(plan.moves, [[], []]);
+    const message = formatShortfallMessage(plan.shortfalls);
+    assert.match(message, /yours: Card A \(present but not tradable right now\)/);
+    assert.match(message, /theirs: Card B \(present but not tradable right now\)/);
+    assert.match(message, /No items were added/);
+    assert.doesNotMatch(message, /TempAsfStm\.ASF\.STM\.Params/);
+  });
 });
 
 describe("formatShortfallMessage", () => {

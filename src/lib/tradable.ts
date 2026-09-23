@@ -332,14 +332,15 @@ export function buildInventoryCardCounts(inventoryData: InventoryData): Inventor
 // in the database get an entry, each flagged `unbalanced` (the scanner's
 // eligibility boolean) when a swap could exist for some partner - i.e. the
 // badge has at least one receivable slot (owned below the applicable set
-// target) AND at least one offerable slot (currently tradable copies above
-// that target, surplus = max(tradable - target, 0) > 0). Targets mirror the
+// target) AND at least one offerable slot (owned above that target with at
+// least one currently-tradable copy to send, offerable =
+// max(min(tradable, owned - target), 0) > 0). Targets mirror the
 // badge page and the matcher: maxSets = floor(total / size),
 // lastSet = ceil(total / size); badge state 0 trades against maxSets, state 1
 // against lastSet (state 2 - nothing to do - is never eligible). Cards absent
 // from the inventory count as owned 0 (missing cards count as zero owned
 // copies). Tradability unknown reaches this gate as tradable == owned
-// (badge-page fallback upstream), so the surplus rule then degrades to
+// (badge-page fallback upstream), so the rule then degrades to
 // owned - target.
 export function buildScanEligibility(
   inventoryCardCounts: InventoryCardCounts,
@@ -362,7 +363,7 @@ export function buildScanEligibility(
     };
   }
 
-  /* Check which appIds can actually trade (receivable slot + tradable surplus) */
+  /* Check which appIds can actually trade (receivable slot + retained-owned offerable copy) */
   for (const appId in scanResult) {
     const entry = scanResult[appId];
     if (!entry) {
@@ -384,7 +385,7 @@ export function buildScanEligibility(
 
     const target = state === 0 ? maxSets : lastSet;
     const receivable = (missingSlots > 0 && target > 0) || cards.some((card) => card.owned < target);
-    const offerable = cards.some((card) => card.tradable > target);
+    const offerable = cards.some((card) => card.owned > target && card.tradable > 0);
 
     entry.unbalanced = state !== 2 && receivable && offerable;
   }
