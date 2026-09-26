@@ -7,7 +7,7 @@
 // (`MoveItemToTrade`), shows the dialogs, and throws the aborts. Behavior is
 // intentionally identical to the inline code.
 
-import type { SteamInventoryDescription } from "./models";
+import type { SteamInventoryDescription, TradableFlag } from "./models";
 import { getTradableAfterTime, isTradeOfferItemTradable } from "./tradable";
 
 /** One live trade-inventory entry as the planner sees it. */
@@ -16,6 +16,71 @@ export interface OfferPoolItem extends SteamInventoryDescription {
   type: string;
   id: string;
   element: unknown;
+}
+
+/** Nested per-item description as Steam's trade-page inventory carries it
+ *  (`CInventoryItem.description`): name, verdict, and hold text live here
+ *  instead of top-level on the pool entry. */
+export interface LivePoolDescription {
+  market_hash_name?: unknown;
+  tradable?: unknown;
+  type?: unknown;
+  descriptions?: unknown;
+  owner_descriptions?: unknown;
+}
+
+/**
+ * Raw live trade-page pool entry: either the flat planner shape
+ * (`market_hash_name`/`tradable`/`type`/`id` top-level) or the Steam
+ * `CInventoryItem` shape (those fields nested under `description`, identity
+ * under `assetid`). Every pool entry the planner consumes may arrive in
+ * either shape.
+ */
+export interface RawOfferPoolItem {
+  market_hash_name?: unknown;
+  tradable?: unknown;
+  type?: unknown;
+  id?: unknown;
+  assetid?: unknown;
+  element?: unknown;
+  classid?: unknown;
+  instanceid?: unknown;
+  descriptions?: unknown;
+  owner_descriptions?: unknown;
+  description?: LivePoolDescription | null | undefined;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function asDescriptionLines(value: unknown): SteamInventoryDescription["descriptions"] {
+  return Array.isArray(value) ? (value as SteamInventoryDescription["descriptions"]) : undefined;
+}
+
+/**
+ * Normalizes one raw live-pool entry into the flat planner shape. Flat
+ * top-level fields win; the nested `description` fills whatever is missing,
+ * so scan-time counting and offer-time selection reason about the same
+ * name and the same tradability verdict. Unknown/missing fields fail open
+ * exactly like the shared verdict (no name matches nothing; no flag counts
+ * as tradable). Idempotent: normalizing an already-flat item is a no-op.
+ */
+export function normalizeOfferPoolItem(raw: RawOfferPoolItem | OfferPoolItem | null | undefined): OfferPoolItem {
+  const item = (raw ?? {}) as RawOfferPoolItem;
+  const nested = (item.description ?? {}) as LivePoolDescription;
+  const idValue = item.id ?? item.assetid;
+  return {
+    classid: asNonEmptyString(item.classid) ?? "",
+    instanceid: asNonEmptyString(item.instanceid) ?? "",
+    tradable: (item.tradable ?? nested.tradable) as TradableFlag | undefined,
+    market_hash_name: asNonEmptyString(item.market_hash_name) ?? asNonEmptyString(nested.market_hash_name) ?? "",
+    type: asNonEmptyString(item.type) ?? asNonEmptyString(nested.type) ?? "",
+    id: typeof idValue === "string" ? idValue : typeof idValue === "number" ? String(idValue) : "",
+    element: item.element,
+    descriptions: asDescriptionLines(item.descriptions) ?? asDescriptionLines(nested.descriptions),
+    owner_descriptions: asDescriptionLines(item.owner_descriptions) ?? asDescriptionLines(nested.owner_descriptions),
+  };
 }
 
 /** One planned move: the inventory element to add for a requested name. */
@@ -80,14 +145,16 @@ export function sortOfferCopiesDesc(copies: Array<{ id: string }>): void {
 /**
  * Plans both sides of the offer: for each requested name (in order) pick one
  * tradable pool copy — first (SORT: highest id) or random (RANDOM) — and flag
- * `failLater` when a name has no selectable copy. Held copies
- * (trade-state negative or future "Tradable After") are skipped, so a fully
- * held name falls through to the missing-items abort downstream. Every such
- * occurrence is also recorded in `shortfalls` with its side and reason.
+ * `failLater` when a name has no selectable copy. Pool entries are normalized
+ * first, so flat and nested-`description` live shapes filter identically.
+ * Held copies (trade-state negative or future "Tradable After") are skipped,
+ * so a fully held name falls through to the missing-items abort downstream.
+ * Every such occurrence is also recorded in `shortfalls` with its side and
+ * reason.
  */
 export function planOfferSelection(
   requested: [string[], string[]],
-  pools: OfferPoolItem[][],
+  pools: RawOfferPoolItem[][],
   order: string,
   randomIndex: (min: number, max: number) => number = getRandomOfferIndex,
 ): OfferSelectionPlan {
@@ -95,9 +162,10 @@ export function planOfferSelection(
   const cardTypes: [string[], string[]] = [[], []];
   const shortfalls: UnsuppliedCard[] = [];
   let failLater = false;
+  const normalizedPools = pools.map((pool) => (pool ?? []).map((item) => normalizeOfferPoolItem(item)));
   requested.forEach(function (requestedCards: string[], i: number) {
     const side = (i === 0 ? 0 : 1) as 0 | 1;
-    const pool = pools[i] ?? [];
+    const pool = normalizedPools[i] ?? [];
     const tmpCards: Record<string, Array<{ type: string; element: unknown; id: string }>> = {};
     for (const item of pool) {
       // add all matching cards to temporary dict
@@ -181,7 +249,7 @@ export interface RetriedCopy {
  */
 export function retryUnselectableCopies(
   shortfalls: UnsuppliedCard[],
-  pools: OfferPoolItem[][],
+  pools: RawOfferPoolItem[][],
   usedIds: ReadonlySet<string>,
   deps: LiveRetryDeps,
 ): { kept: RetriedCopy[]; resolved: UnsuppliedCard[]; pending: UnsuppliedCard[] } {
@@ -189,12 +257,13 @@ export function retryUnselectableCopies(
   const kept: RetriedCopy[] = [];
   const resolved: UnsuppliedCard[] = [];
   const pending: UnsuppliedCard[] = [];
+  const normalizedPools = pools.map((pool) => (pool ?? []).map((item) => normalizeOfferPoolItem(item)));
   for (const shortfall of shortfalls) {
     if (shortfall.reason !== "unselectable") {
       pending.push(shortfall);
       continue;
     }
-    const pool = pools[shortfall.side] ?? [];
+    const pool = normalizedPools[shortfall.side] ?? [];
     let placed: RetriedCopy | null = null;
     for (const item of pool) {
       if (item.market_hash_name !== shortfall.name || taken.has(item.id)) {

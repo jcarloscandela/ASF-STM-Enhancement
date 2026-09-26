@@ -34,9 +34,11 @@ import {
   formatShortfallMessage,
   getRandomOfferIndex,
   isOneToOneTrade,
+  normalizeOfferPoolItem,
   planOfferSelection,
   retryUnselectableCopies,
   type OfferPoolItem,
+  type RawOfferPoolItem,
   type UnsuppliedCard,
 } from "./lib/offer-writer";
 import {
@@ -2045,7 +2047,12 @@ declare const unsafeWindow: any;
       const pools = [0, 1].map((i: number) => {
         const live = g_v.Users[i].rgContexts[753][6].inventory;
         live.BuildInventoryDisplayElements();
-        return Object.values(live.rgInventory) as OfferPoolItem[];
+        // Normalize the live entries: the trade page may carry name/verdict
+        // fields nested under `description` (CInventoryItem shape) instead of
+        // top-level, and the planner must see the same fields the scan uses.
+        return Object.values(live.rgInventory).map((entry) =>
+          normalizeOfferPoolItem(entry as RawOfferPoolItem),
+        ) as OfferPoolItem[];
       });
       const plan = planOfferSelection(g_v.Cards, pools, g_s.order, getRandomOfferIndex);
       let shortfalls: UnsuppliedCard[] = plan.shortfalls;

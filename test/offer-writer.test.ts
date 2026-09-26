@@ -12,10 +12,13 @@ import assert from "node:assert/strict";
 import {
   formatShortfallMessage,
   isOneToOneTrade,
+  normalizeOfferPoolItem,
   planOfferSelection,
   sortOfferCopiesDesc,
   type OfferPoolItem,
+  type RawOfferPoolItem,
 } from "../src/lib/offer-writer";
+import { isCurrentlyTradableDescription, isTradeOfferItemTradable } from "../src/lib/tradable";
 
 function poolItem(name: string, id: string, type = "Trading Card"): OfferPoolItem {
   return {
@@ -184,6 +187,88 @@ describe("planOfferSelection", () => {
     assert.match(message, /theirs: Card B \(present but not tradable right now\)/);
     assert.match(message, /No items were added/);
     assert.doesNotMatch(message, /TempAsfStm\.ASF\.STM\.Params/);
+  });
+});
+
+describe("normalizeOfferPoolItem", () => {
+  it("keeps flat pool items unchanged (idempotent)", () => {
+    const flat = poolItem("Card A", "11");
+    const normalized = normalizeOfferPoolItem(flat);
+    assert.equal(normalized.market_hash_name, "Card A");
+    assert.equal(normalized.id, "11");
+    assert.equal(normalized.type, "Trading Card");
+    assert.deepEqual(normalizeOfferPoolItem(normalized), normalized);
+  });
+
+  it("resolves name, verdict, type, and id from the nested description shape", () => {
+    const raw: RawOfferPoolItem = {
+      assetid: "42",
+      classid: "c",
+      instanceid: "i",
+      description: {
+        market_hash_name: "Card A",
+        tradable: 1,
+        type: "Trading Card",
+        descriptions: [{ value: "Tradable After 01/01/2020, 09:00:00" }],
+      },
+      element: { elementId: "42" },
+    };
+    const normalized = normalizeOfferPoolItem(raw);
+    assert.equal(normalized.market_hash_name, "Card A");
+    assert.equal(normalized.id, "42");
+    assert.equal(normalized.type, "Trading Card");
+    assert.equal(normalized.tradable, 1);
+    assert.equal(isTradeOfferItemTradable(normalized), true);
+  });
+
+  it("prefers flat top-level fields over nested ones", () => {
+    const raw: RawOfferPoolItem = {
+      market_hash_name: "Top Name",
+      tradable: 0,
+      type: "Top Type",
+      id: "7",
+      description: { market_hash_name: "Nested Name", tradable: 1, type: "Nested Type" },
+      element: {},
+    };
+    const normalized = normalizeOfferPoolItem(raw);
+    assert.equal(normalized.market_hash_name, "Top Name");
+    assert.equal(normalized.tradable, 0);
+    assert.equal(normalized.type, "Top Type");
+    assert.equal(normalized.id, "7");
+  });
+
+  it("fails open on missing fields exactly like the shared verdict", () => {
+    const normalized = normalizeOfferPoolItem({} as RawOfferPoolItem);
+    assert.equal(normalized.market_hash_name, "");
+    assert.equal(isTradeOfferItemTradable(normalized), true);
+    assert.equal(normalizeOfferPoolItem(null).market_hash_name, "");
+    assert.equal(normalizeOfferPoolItem(undefined).market_hash_name, "");
+  });
+
+  it("agrees with the scan-time verdict for normalized nested shapes", () => {
+    const NOW = new Date(2026, 8, 21, 12, 0, 0).getTime();
+    const shapes: RawOfferPoolItem[] = [
+      { assetid: "1", description: { market_hash_name: "A", tradable: 1 } },
+      { assetid: "2", description: { market_hash_name: "A", tradable: 0 } },
+      {
+        assetid: "3",
+        description: { market_hash_name: "A", tradable: 1, descriptions: [{ value: "Tradable After 26/09/2099" }] },
+      },
+      {
+        assetid: "4",
+        description: { market_hash_name: "A", tradable: 1, descriptions: [{ value: "Tradable After 01/01/2020" }] },
+      },
+    ];
+    const expected = [true, false, false, true];
+    shapes.forEach((shape, index) => {
+      const normalized = normalizeOfferPoolItem(shape);
+      assert.equal(isTradeOfferItemTradable(normalized, NOW), expected[index]);
+      assert.equal(
+        isTradeOfferItemTradable(normalized, NOW),
+        isCurrentlyTradableDescription(normalized, NOW),
+        `shape ${index} diverges between offer-time and scan-time verdicts`,
+      );
+    });
   });
 });
 

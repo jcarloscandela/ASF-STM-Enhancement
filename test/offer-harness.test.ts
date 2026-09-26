@@ -19,6 +19,7 @@ import {
   retryUnselectableCopies,
   type LiveRetryDeps,
   type OfferPoolItem,
+  type RawOfferPoolItem,
   type TradeReadinessUser,
   type UnsuppliedCard,
 } from "../src/lib/offer-writer";
@@ -42,6 +43,27 @@ function heldPoolItem(name: string, id: string): OfferPoolItem {
   return {
     ...poolItem(name, id, true),
     descriptions: [{ value: "Tradable After 26/09/2099, 09:00:00" }],
+  };
+}
+
+/** Raw Steam trade-page pool entry: name/verdict fields live on the nested
+ *  `description` (CInventoryItem shape), not top-level. The planner must
+ *  normalize this into a selectable copy. */
+function livePoolItem(name: string, assetid: string, tradable: boolean | 0, holdValue?: string): RawOfferPoolItem {
+  const description: Record<string, unknown> = {
+    market_hash_name: name,
+    tradable,
+    type: "Trading Card",
+  };
+  if (holdValue !== undefined) {
+    description["descriptions"] = [{ value: holdValue }];
+  }
+  return {
+    assetid,
+    classid: "c",
+    instanceid: "i",
+    description,
+    element: { elementId: assetid },
   };
 }
 
@@ -131,6 +153,91 @@ describe("offer selection applied to a canned trade page", () => {
     assert.equal(plan.moves[0]![0]!.id, "3");
   });
 
+  it("selects the tradable copy at any id position (SORT)", () => {
+    // The tradable copy must win regardless of asset-id order: held copies
+    // with higher ids must never shadow it.
+    const cases: Array<{ pool: OfferPoolItem[]; expectedId: string }> = [
+      {
+        pool: [poolItem("Card A", "1"), poolItem("Card A", "2", 0), heldPoolItem("Card A", "3")],
+        expectedId: "1",
+      },
+      {
+        pool: [poolItem("Card A", "1", 0), poolItem("Card A", "2"), heldPoolItem("Card A", "3")],
+        expectedId: "2",
+      },
+      {
+        pool: [poolItem("Card A", "1", 0), heldPoolItem("Card A", "2"), poolItem("Card A", "3")],
+        expectedId: "3",
+      },
+    ];
+    for (const { pool, expectedId } of cases) {
+      const plan = planOfferSelection([["Card A"], ["Card B"]], [pool, [poolItem("Card B", "4")]], "SORT");
+      assert.equal(plan.failLater, false);
+      assert.deepEqual(plan.shortfalls, []);
+      assert.equal(plan.moves[0]!.length, 1);
+      assert.equal(plan.moves[0]![0]!.id, expectedId);
+    }
+  });
+
+  it("selects the tradable copy at any id position (RANDOM)", () => {
+    // RANDOM draws from tradable copies only, so index 0 always resolves to
+    // the single tradable copy no matter where it sits by id.
+    const cases: Array<{ pool: OfferPoolItem[]; expectedId: string }> = [
+      {
+        pool: [poolItem("Card A", "1"), poolItem("Card A", "2", 0), heldPoolItem("Card A", "3")],
+        expectedId: "1",
+      },
+      {
+        pool: [poolItem("Card A", "1", 0), poolItem("Card A", "2"), heldPoolItem("Card A", "3")],
+        expectedId: "2",
+      },
+    ];
+    for (const { pool, expectedId } of cases) {
+      const plan = planOfferSelection([["Card A"], ["Card B"]], [pool, [poolItem("Card B", "4")]], "RANDOM", () => 0);
+      assert.equal(plan.failLater, false);
+      assert.deepEqual(plan.shortfalls, []);
+      assert.equal(plan.moves[0]!.length, 1);
+      assert.equal(plan.moves[0]![0]!.id, expectedId);
+    }
+  });
+
+  it("selects the tradable copy from nested-description pool items", () => {
+    // Reported 72850-Troll repro through the live trade-page shape: the pool
+    // carries name/verdict on `description`, with two temporally blocked
+    // copies and one tradable copy.
+    const plan = planOfferSelection(
+      [["Card A"], ["Card B"]],
+      [
+        [
+          livePoolItem("Card A", "11", true),
+          livePoolItem("Card A", "12", 0),
+          livePoolItem("Card A", "13", true, "Tradable After 26/09/2099, 09:00:00"),
+        ],
+        [livePoolItem("Card B", "14", true)],
+      ],
+      "SORT",
+    );
+    assert.equal(plan.failLater, false);
+    assert.deepEqual(plan.shortfalls, []);
+    assert.equal(plan.moves[0]!.length, 1);
+    assert.equal(plan.moves[0]![0]!.id, "11");
+    assert.equal(plan.moves[1]!.length, 1);
+    assert.equal(plan.moves[1]![0]!.id, "14");
+  });
+
+  it("shortfalls nested-description pools as unselectable, not absent", () => {
+    // Every copy present but held: the reason must stay `unselectable` with
+    // per-copy diagnostics resolved from the nested descriptions.
+    const plan = planOfferSelection(
+      [["Card A"], []],
+      [[livePoolItem("Card A", "11", 0), livePoolItem("Card A", "12", true, "Tradable After 26/09/2099, 09:00:00")]],
+      "SORT",
+    );
+    assert.equal(plan.failLater, true);
+    assert.equal(plan.shortfalls.length, 1);
+    assert.equal(plan.shortfalls[0]!.reason, "unselectable");
+    assert.equal(plan.shortfalls[0]!.detail?.poolCopies, 2);
+  });
   it("selects the tradable copy when held copies share the same name (RANDOM)", () => {
     const plan = planOfferSelection(
       [["Card A"], ["Card B"]],
@@ -274,7 +381,11 @@ describe("empty-offer wiring", () => {
 });
 
 describe("retryUnselectableCopies", () => {
-  function liveTrade(acceptableIds: string[]): { deps: LiveRetryDeps; attempts: string[]; slots: [Set<string>, Set<string>] } {
+  function liveTrade(acceptableIds: string[]): {
+    deps: LiveRetryDeps;
+    attempts: string[];
+    slots: [Set<string>, Set<string>];
+  } {
     const slots: [Set<string>, Set<string>] = [new Set(), new Set()];
     const attempts: string[] = [];
     const deps: LiveRetryDeps = {
@@ -325,10 +436,7 @@ describe("retryUnselectableCopies", () => {
   it("skips copies the metadata plan already consumed and passes absent through", () => {
     const pool: OfferPoolItem[][] = [[poolItem("Card A", "9")], []];
     const { deps, attempts } = liveTrade(["9"]);
-    const shortfalls: UnsuppliedCard[] = [
-      unselectable(0, "Card A"),
-      { side: 0, name: "Ghost", reason: "absent" },
-    ];
+    const shortfalls: UnsuppliedCard[] = [unselectable(0, "Card A"), { side: 0, name: "Ghost", reason: "absent" }];
     // Copy "9" is already in the trade from phase 1: nothing left to try.
     const result = retryUnselectableCopies(shortfalls, pool, new Set(["9"]), deps);
     assert.deepEqual(attempts, []);
