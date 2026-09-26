@@ -122,7 +122,14 @@ describe("planOfferSelection", () => {
     const held = { ...poolItem("Card A", "9"), tradable: false as const };
     const plan = planOfferSelection([["Card A"], []], [[held], []], "AS_IS");
     assert.equal(plan.failLater, true);
-    assert.deepEqual(plan.shortfalls, [{ side: 0, name: "Card A", reason: "unselectable" }]);
+    assert.deepEqual(plan.shortfalls, [
+      {
+        side: 0,
+        name: "Card A",
+        reason: "unselectable",
+        detail: { poolCopies: 1, flagValues: [false], holdDates: [null] },
+      },
+    ]);
   });
 
   it("records the second occurrence of a single copy as unselectable", () => {
@@ -132,7 +139,14 @@ describe("planOfferSelection", () => {
       plan.moves[0].map((m) => m.id),
       ["9"],
     );
-    assert.deepEqual(plan.shortfalls, [{ side: 0, name: "Card A", reason: "unselectable" }]);
+    assert.deepEqual(plan.shortfalls, [
+      {
+        side: 0,
+        name: "Card A",
+        reason: "unselectable",
+        detail: { poolCopies: 1, flagValues: [true], holdDates: [null] },
+      },
+    ]);
   });
 
   it("leaves shortfalls empty on a clean plan", () => {
@@ -151,8 +165,18 @@ describe("planOfferSelection", () => {
     const plan = planOfferSelection([["Card A"], ["Card B"]], [[heldA], [heldB]], "AS_IS");
     assert.equal(plan.failLater, true);
     assert.deepEqual(plan.shortfalls, [
-      { side: 0, name: "Card A", reason: "unselectable" },
-      { side: 1, name: "Card B", reason: "unselectable" },
+      {
+        side: 0,
+        name: "Card A",
+        reason: "unselectable",
+        detail: { poolCopies: 1, flagValues: [false], holdDates: [null] },
+      },
+      {
+        side: 1,
+        name: "Card B",
+        reason: "unselectable",
+        detail: { poolCopies: 1, flagValues: [false], holdDates: [null] },
+      },
     ]);
     assert.deepEqual(plan.moves, [[], []]);
     const message = formatShortfallMessage(plan.shortfalls);

@@ -16,8 +16,11 @@ import {
   formatShortfallMessage,
   isOneToOneTrade,
   planOfferSelection,
+  retryUnselectableCopies,
+  type LiveRetryDeps,
   type OfferPoolItem,
   type TradeReadinessUser,
+  type UnsuppliedCard,
 } from "../src/lib/offer-writer";
 import { getPartner } from "../src/lib/helpers";
 import { diagnoseTradeHandoff, formatTradeSetupMessage, resolveTradeCards } from "../src/lib/matcher-core";
@@ -141,6 +144,25 @@ describe("offer selection applied to a canned trade page", () => {
     assert.equal(plan.moves[0]![0]!.id, "3");
   });
 
+  it("attaches per-copy diagnostics to unselectable shortfalls", () => {
+    const plan = planOfferSelection(
+      [["Card A"], ["Card B"]],
+      [[poolItem("Card A", "1", 0), heldPoolItem("Card A", "2")], [poolItem("Card B", "3")]],
+      "SORT",
+    );
+    assert.equal(plan.failLater, true);
+    assert.equal(plan.shortfalls.length, 1);
+    const shortfall = plan.shortfalls[0]!;
+    assert.equal(shortfall.reason, "unselectable");
+    assert.equal(shortfall.detail?.poolCopies, 2);
+    assert.deepEqual(shortfall.detail?.flagValues, [0, true]);
+    assert.equal(shortfall.detail?.holdDates.length, 2);
+    assert.equal(shortfall.detail?.holdDates[0], null);
+    assert.notEqual(shortfall.detail?.holdDates[1], null);
+    // The visible dialog is unchanged by diagnostics.
+    assert.match(formatShortfallMessage(plan.shortfalls), /yours: Card A \(present but not tradable right now\)/);
+  });
+
   it("applies zero moves and names the cards when the user pool is short (6v6 repro)", () => {
     // Reported case: balanced 6-vs-6 handoff, user inventory supplies only 4.
     // addCards gates moves on shortfalls, so the offer stays empty and the
@@ -248,6 +270,70 @@ describe("empty-offer wiring", () => {
     assert.equal(dialogs.length, 1);
     assert.match(dialogs[0]![1], /No items were added/);
     assert.doesNotMatch(dialogs[0]![1], /TempAsfStm\.ASF\.STM\.Params/);
+  });
+});
+
+describe("retryUnselectableCopies", () => {
+  function liveTrade(acceptableIds: string[]): { deps: LiveRetryDeps; attempts: string[]; slots: [Set<string>, Set<string>] } {
+    const slots: [Set<string>, Set<string>] = [new Set(), new Set()];
+    const attempts: string[] = [];
+    const deps: LiveRetryDeps = {
+      moveItem: (element: unknown) => {
+        const id = (element as { elementId: string }).elementId;
+        attempts.push(id);
+        if (acceptableIds.includes(id)) {
+          slots[0].add(id);
+        }
+      },
+      slotCount: (side: 0 | 1) => slots[side].size,
+    };
+    return { deps, attempts, slots };
+  }
+
+  function unselectable(side: 0 | 1, name: string): UnsuppliedCard {
+    return { side, name, reason: "unselectable" };
+  }
+
+  it("keeps the first copy the live trade accepts, trying held ones first", () => {
+    const pool: OfferPoolItem[][] = [
+      [poolItem("Card A", "1", 0), heldPoolItem("Card A", "2"), poolItem("Card A", "3")],
+      [poolItem("Card B", "4")],
+    ];
+    // Only copy "3" is truly tradable; the trade ignores the held copies.
+    const { deps, attempts, slots } = liveTrade(["3", "4"]);
+    const result = retryUnselectableCopies([unselectable(0, "Card A")], pool, new Set(), deps);
+    assert.deepEqual(attempts, ["1", "2", "3"]);
+    assert.equal(result.kept.length, 1);
+    assert.equal(result.kept[0]!.move.id, "3");
+    assert.equal(result.resolved.length, 1);
+    assert.deepEqual(result.pending, []);
+    assert.equal(slots[0].size, 1);
+  });
+
+  it("leaves everything pending when the trade accepts nothing", () => {
+    const pool: OfferPoolItem[][] = [[poolItem("Card A", "1", 0)], [poolItem("Card B", "4", 0)]];
+    const { deps, slots } = liveTrade([]);
+    const shortfalls = [unselectable(0, "Card A"), unselectable(1, "Card B")];
+    const result = retryUnselectableCopies(shortfalls, pool, new Set(), deps);
+    assert.deepEqual(result.kept, []);
+    assert.deepEqual(result.resolved, []);
+    assert.deepEqual(result.pending, shortfalls);
+    assert.equal(slots[0].size, 0);
+    assert.equal(slots[1].size, 0);
+  });
+
+  it("skips copies the metadata plan already consumed and passes absent through", () => {
+    const pool: OfferPoolItem[][] = [[poolItem("Card A", "9")], []];
+    const { deps, attempts } = liveTrade(["9"]);
+    const shortfalls: UnsuppliedCard[] = [
+      unselectable(0, "Card A"),
+      { side: 0, name: "Ghost", reason: "absent" },
+    ];
+    // Copy "9" is already in the trade from phase 1: nothing left to try.
+    const result = retryUnselectableCopies(shortfalls, pool, new Set(["9"]), deps);
+    assert.deepEqual(attempts, []);
+    assert.deepEqual(result.kept, []);
+    assert.deepEqual(result.pending, shortfalls);
   });
 });
 

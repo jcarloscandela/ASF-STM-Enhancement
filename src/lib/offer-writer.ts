@@ -8,7 +8,7 @@
 // intentionally identical to the inline code.
 
 import type { SteamInventoryDescription } from "./models";
-import { isTradeOfferItemTradable } from "./tradable";
+import { getTradableAfterTime, isTradeOfferItemTradable } from "./tradable";
 
 /** One live trade-inventory entry as the planner sees it. */
 export interface OfferPoolItem extends SteamInventoryDescription {
@@ -26,6 +26,22 @@ export interface PlannedMove {
   element: unknown;
 }
 
+/** Per-copy diagnostic facts behind one `unselectable` shortfall. */
+export interface UnsuppliedCardDetail {
+  /** How many pool copies carried the requested name. */
+  poolCopies: number;
+  /** Raw `tradable` flag values seen across those copies, in pool order. */
+  flagValues: unknown[];
+  /** Parsed `Tradable After` hold timestamp (ms epoch) per copy, or null. */
+  holdDates: Array<number | null>;
+  /**
+   * Scan-time tradable count for the card when the caller has it (the offer
+   * page's persisted params carry no per-card counts, so this stays unset
+   * there; present only for callers that pass inventory counts in).
+   */
+  scanTradable?: number;
+}
+
 /** One requested card occurrence the live inventory could not supply. */
 export interface UnsuppliedCard {
   /** 0 = user's (send) side, 1 = partner's (receive) side. */
@@ -38,6 +54,8 @@ export interface UnsuppliedCard {
    * an earlier requested occurrence).
    */
   reason: "absent" | "unselectable";
+  /** Diagnostic facts for `unselectable` shortfalls; absent for `absent`. */
+  detail?: UnsuppliedCardDetail;
 }
 
 /** Planned moves per side plus the abort bookkeeping `addCards` uses. */
@@ -106,8 +124,21 @@ export function planOfferSelection(
       const currentCards = tmpCards[elem] || []; // all cards from inventory with requested signature
       if (currentCards.length === 0) {
         failLater = true;
-        const present = pool.some((item) => item.market_hash_name === elem);
-        shortfalls.push({ side, name: elem, reason: present ? "unselectable" : "absent" });
+        const present = pool.filter((item) => item.market_hash_name === elem);
+        if (present.length > 0) {
+          shortfalls.push({
+            side,
+            name: elem,
+            reason: "unselectable",
+            detail: {
+              poolCopies: present.length,
+              flagValues: present.map((item) => item.tradable),
+              holdDates: present.map((item) => getTradableAfterTime(item)),
+            },
+          });
+        } else {
+          shortfalls.push({ side, name: elem, reason: "absent" });
+        }
       } else {
         let pick = 0;
         if (order === "RANDOM") {
@@ -122,6 +153,83 @@ export function planOfferSelection(
     });
   });
   return { moves, failLater, cardTypes, shortfalls };
+}
+
+/**
+ * Trade-page callbacks the live retry needs, injected so the retry stays
+ * unit-testable without Steam globals (same pattern as `assessTradeReadiness`).
+ */
+export interface LiveRetryDeps {
+  /** Places one pool copy into the trade (mirrors `MoveItemToTrade`). */
+  moveItem: (element: unknown) => void;
+  /** Current filled-slot count for one side (mirrors `#your_slots .has_item`). */
+  slotCount: (side: 0 | 1) => number;
+}
+
+/** One retry-kept copy plus the side it was placed on. */
+export interface RetriedCopy {
+  side: 0 | 1;
+  move: PlannedMove;
+}
+
+/**
+ * Ground-truth retry for `unselectable` shortfalls: for each one, attempts
+ * every present pool copy the metadata plan has not already consumed and
+ * keeps the first copy the live trade actually accepts (its side's slot
+ * count rises). Copies the trade ignores are skipped; occurrences nothing
+ * fills stay pending for the loud abort path. `usedIds` is never mutated.
+ */
+export function retryUnselectableCopies(
+  shortfalls: UnsuppliedCard[],
+  pools: OfferPoolItem[][],
+  usedIds: ReadonlySet<string>,
+  deps: LiveRetryDeps,
+): { kept: RetriedCopy[]; resolved: UnsuppliedCard[]; pending: UnsuppliedCard[] } {
+  const taken = new Set<string>(usedIds);
+  const kept: RetriedCopy[] = [];
+  const resolved: UnsuppliedCard[] = [];
+  const pending: UnsuppliedCard[] = [];
+  for (const shortfall of shortfalls) {
+    if (shortfall.reason !== "unselectable") {
+      pending.push(shortfall);
+      continue;
+    }
+    const pool = pools[shortfall.side] ?? [];
+    let placed: RetriedCopy | null = null;
+    for (const item of pool) {
+      if (item.market_hash_name !== shortfall.name || taken.has(item.id)) {
+        continue;
+      }
+      let before = 0;
+      try {
+        before = deps.slotCount(shortfall.side);
+        deps.moveItem(item.element);
+      } catch {
+        continue;
+      }
+      let after = before;
+      try {
+        after = deps.slotCount(shortfall.side);
+      } catch {
+        after = before;
+      }
+      if (after > before) {
+        placed = {
+          side: shortfall.side,
+          move: { name: item.market_hash_name, type: item.type, id: item.id, element: item.element },
+        };
+        taken.add(item.id);
+        break;
+      }
+    }
+    if (placed !== null) {
+      kept.push(placed);
+      resolved.push(shortfall);
+    } else {
+      pending.push(shortfall);
+    }
+  }
+  return { kept, resolved, pending };
 }
 
 /**

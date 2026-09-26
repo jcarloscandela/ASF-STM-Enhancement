@@ -35,7 +35,9 @@ import {
   getRandomOfferIndex,
   isOneToOneTrade,
   planOfferSelection,
+  retryUnselectableCopies,
   type OfferPoolItem,
+  type UnsuppliedCard,
 } from "./lib/offer-writer";
 import {
   buildRateLimitFailFastError,
@@ -2046,9 +2048,46 @@ declare const unsafeWindow: any;
         return Object.values(live.rgInventory) as OfferPoolItem[];
       });
       const plan = planOfferSelection(g_v.Cards, pools, g_s.order, getRandomOfferIndex);
-      if (plan.failLater || plan.shortfalls.length > 0) {
-        const detail = formatShortfallMessage(plan.shortfalls);
-        debugPrint("unsupplied cards: " + JSON.stringify(plan.shortfalls));
+      let shortfalls: UnsuppliedCard[] = plan.shortfalls;
+      // Phase 2 (ground-truth retry): metadata said `unselectable`, but the
+      // live trade is the authority — try each present copy and keep the ones
+      // Steam accepts. Runs only when stuck copies can be taken back out, so
+      // a failed retry still leaves zero net moves.
+      const removeItem = (unsafeWindow as any).RemoveItemFromTrade;
+      if (shortfalls.some((entry) => entry.reason === "unselectable") && typeof removeItem === "function") {
+        const usedIds = new Set<string>();
+        plan.moves.forEach(function (sideMoves) {
+          sideMoves.forEach(function (move) {
+            usedIds.add(move.id);
+          });
+        });
+        const retry = retryUnselectableCopies(shortfalls, pools, usedIds, {
+          moveItem: function (element: unknown): void {
+            unsafeWindow.MoveItemToTrade(element);
+          },
+          slotCount: function (side: 0 | 1): number {
+            return document.querySelectorAll(side === 0 ? "#your_slots .has_item" : "#their_slots .has_item").length;
+          },
+        });
+        if (retry.pending.length === 0) {
+          retry.kept.forEach(function (kept) {
+            plan.moves[kept.side]!.push(kept.move);
+            plan.cardTypes[kept.side]!.push(kept.move.type);
+          });
+          shortfalls = [];
+        } else {
+          for (let r = retry.kept.length - 1; r >= 0; r--) {
+            try {
+              removeItem(retry.kept[r]!.move.element);
+            } catch {
+              /* abort path below already leaves the failure loud */
+            }
+          }
+        }
+      }
+      if (shortfalls.length > 0) {
+        const detail = formatShortfallMessage(shortfalls);
+        debugPrint("unsupplied cards: " + JSON.stringify(shortfalls));
         unsafeWindow.ShowAlertDialog("Items missing", detail);
         throw "Cards missing";
       }
