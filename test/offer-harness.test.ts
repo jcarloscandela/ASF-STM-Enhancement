@@ -34,6 +34,14 @@ function poolItem(name: string, id: string, tradable: boolean | 0 = true): Offer
   };
 }
 
+function heldPoolItem(name: string, id: string): OfferPoolItem {
+  // Future "Tradable After" hold with an allowing flag: held via hold text.
+  return {
+    ...poolItem(name, id, true),
+    descriptions: [{ value: "Tradable After 26/09/2099, 09:00:00" }],
+  };
+}
+
 function tradePage(): { yours: HTMLElement; theirs: HTMLElement } {
   document.body.innerHTML = `<div id="your_slots"></div><div id="their_slots"></div><div id="trade_offer_note"></div>`;
   return {
@@ -104,6 +112,33 @@ describe("offer selection applied to a canned trade page", () => {
     applyMoves([yours, theirs], plan.moves);
     assert.equal(yours.querySelectorAll(".has_item").length, 0);
     assert.equal(theirs.querySelectorAll(".has_item").length, 1);
+  });
+
+  it("selects the tradable copy when held copies share the same name (SORT)", () => {
+    // User repro: owned 3 with 2 temporally blocked — the offer must use the
+    // tradable copy instead of failing.
+    const plan = planOfferSelection(
+      [["Card A"], ["Card B"]],
+      [[poolItem("Card A", "1", 0), heldPoolItem("Card A", "2"), poolItem("Card A", "3")], [poolItem("Card B", "4")]],
+      "SORT",
+    );
+    assert.equal(plan.failLater, false);
+    assert.deepEqual(plan.shortfalls, []);
+    assert.equal(plan.moves[0]!.length, 1);
+    assert.equal(plan.moves[0]![0]!.id, "3");
+  });
+
+  it("selects the tradable copy when held copies share the same name (RANDOM)", () => {
+    const plan = planOfferSelection(
+      [["Card A"], ["Card B"]],
+      [[poolItem("Card A", "1", 0), heldPoolItem("Card A", "2"), poolItem("Card A", "3")], [poolItem("Card B", "4")]],
+      "RANDOM",
+      () => 0,
+    );
+    assert.equal(plan.failLater, false);
+    assert.deepEqual(plan.shortfalls, []);
+    assert.equal(plan.moves[0]!.length, 1);
+    assert.equal(plan.moves[0]![0]!.id, "3");
   });
 
   it("applies zero moves and names the cards when the user pool is short (6v6 repro)", () => {

@@ -224,6 +224,19 @@ describe("isTradeOfferItemTradable", () => {
     assert.equal(isTradeOfferItemTradable(item, NOW), false);
   });
 
+  it("agrees with the scan-time verdict for identical shapes", () => {
+    const shapes: Array<Partial<SteamInventoryDescription>> = [
+      {},
+      { tradable: 0 },
+      { descriptions: [{ value: "Tradable After: 26/09/2026, 09:00:00", color: "" }] },
+      { descriptions: [{ value: "Tradable After: 01/01/2020, 09:00:00", color: "" }] },
+    ];
+    for (const shape of shapes) {
+      const item = offerItem(shape);
+      assert.equal(isTradeOfferItemTradable(item, NOW), isCurrentlyTradableDescription(item, NOW));
+    }
+  });
+
   it("accepts past-dated holds and unknown shapes (fail open)", () => {
     const past = offerItem({
       descriptions: [{ value: "Tradable After: 01/01/2020, 09:00:00", color: "" }],
