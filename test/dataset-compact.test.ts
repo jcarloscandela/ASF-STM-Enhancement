@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BUILT_USERSCRIPT_BUDGET_BYTES,
+  BUNDLED_ICON_URL_PREFIX,
   COMPACT_DATASET_BUDGET_BYTES,
   compactDatasetForPublish,
   normalizeDataset,
@@ -64,4 +65,55 @@ describe("compact publish dataset", () => {
     const decoded = normalizeDataset(compactDatasetForPublish(expected));
     expect(decoded).toEqual(expected);
   }, 30000);
+});
+
+describe("compact codec edge cases", () => {
+  it("round-trips prefix-less hashes with titles and icons", () => {
+    const raw = {
+      "7": {
+        size: 5,
+        cards: [{ hash: "Special Promo Card", title: "Promo", iconUrl: "https://example.com/promo.png" }],
+      },
+    };
+    const decoded = normalizeDataset(compactDatasetForPublish(normalizeDataset(raw)));
+    expect(decoded["7"]?.cards).toEqual([
+      { hash: "Special Promo Card", title: "Promo", iconUrl: "https://example.com/promo.png" },
+    ]);
+  });
+
+  it("round-trips absent titles to no title", () => {
+    const raw = { "7": { size: 5, cards: [{ hash: "7-Nameless" }] } };
+    const decoded = normalizeDataset(compactDatasetForPublish(normalizeDataset(raw)));
+    expect(decoded["7"]?.cards).toEqual([{ hash: "7-Nameless" }]);
+  });
+
+  it("round-trips suffix-equal titles through the empty marker", () => {
+    const raw = {
+      "7": {
+        size: 5,
+        cards: [
+          { hash: "7-Same", title: "Same" },
+          { hash: "7-Other", title: "Different" },
+        ],
+      },
+    };
+    const decoded = normalizeDataset(compactDatasetForPublish(normalizeDataset(raw)));
+    expect(decoded["7"]?.cards).toEqual([
+      { hash: "7-Same", title: "Same" },
+      { hash: "7-Other", title: "Different" },
+    ]);
+  });
+
+  it("round-trips stripped icon tails and icon-less cards", () => {
+    const tail = "tail-bytes";
+    const raw = {
+      "7": {
+        size: 5,
+        cards: [{ hash: "7-Art", iconUrl: `${BUNDLED_ICON_URL_PREFIX}${tail}` }, { hash: "7-NoArt" }],
+      },
+    };
+    const decoded = normalizeDataset(compactDatasetForPublish(normalizeDataset(raw)));
+    expect(decoded["7"]?.cards?.[0]?.iconUrl).toBe(`${BUNDLED_ICON_URL_PREFIX}${tail}`);
+    expect(decoded["7"]?.cards?.[1]).toEqual({ hash: "7-NoArt" });
+  });
 });

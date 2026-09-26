@@ -45,15 +45,23 @@ interface WorkBadge extends MatchBadge {
 
 export function calcBadgeState(badge: MatchBadge): number {
   //state 0 - less than max sets; state 1 - we have max sets, even out the rest, state 2 - all even
-  return badge.cards[badge.maxCards - 1]!.count === badge.maxSets
-    ? badge.cards[0]!.count === badge.lastSet
-      ? 2 //nothing to do
-      : 1 //max sets are here, but we can distribute cards further
-    : 0; //less than max sets
+  // min/max computed directly: callers keep cards sorted descending, but the
+  // state must not silently miscompute for unsorted input.
+  let min = Number.POSITIVE_INFINITY;
+  let max = 0;
+  for (const card of badge.cards) {
+    if (card.count < min) {
+      min = card.count;
+    }
+    if (card.count > max) {
+      max = card.count;
+    }
+  }
+  return min === badge.maxSets ? (max === badge.lastSet ? 2 : 1) : 0;
 }
 
 function accumulate(target: MatchItem[], appId: number, title: string, card: MatchCardRef): void {
-  const existing = target.find((item) => item.appId == appId);
+  const existing = target.find((item) => item.appId === appId);
   if (existing === undefined) {
     target.push({ appId, title, cards: [card] });
     return;
@@ -81,8 +89,10 @@ export function computeMatches(
   const itemsToReceive: MatchItem[] = [];
 
   for (let i = 0; i < botBadges.length; i++) {
-    let myBadge = JSON.parse(JSON.stringify(myBadges[i]!)) as WorkBadge;
-    let theirBadge = JSON.parse(JSON.stringify(botBadges[i]!)) as MatchBadge;
+    // structuredClone: faster than a JSON round-trip for these plain-data
+    // badges and preserves undefined-valued fields.
+    let myBadge = structuredClone(myBadges[i]!) as WorkBadge;
+    let theirBadge = structuredClone(botBadges[i]!) as MatchBadge;
     // Owned counts (`count`) drive state and need checks; the tradable
     // remainder caps offers. Clamped by `count` so unexpected input cannot
     // offer copies the user does not own.
@@ -113,7 +123,7 @@ export function computeMatches(
             (myState === 0 && myBadge.cards[myInd]!.count < myBadge.maxSets) ||
             (myState === 1 && myBadge.cards[myInd]!.count < myBadge.lastSet)
           ) {
-            //we need this ^Kfor the Emperor
+            //we need this card to complete the badge
             debugPrint("we need this: " + theirBadge.cards[j]!.item + " (" + theirBadge.cards[j]!.count + ")");
             //find a card to match.
             for (let k = 0; k < myInd; k++) {
@@ -132,7 +142,6 @@ export function computeMatches(
                 // are never spent) and still hold a currently-tradable copy
                 // to send - held owned copies beyond the retained count keep
                 // set progress but never create offer capacity by themselves.
-                //that's fine for us
                 debugPrint("it's a good trade for us");
                 let theirInd = theirBadge.cards.findIndex((a) => a.number === myBadge.cards[k]!.number); //index of slot where they will receive card
                 if (!isMatchEverything(botIndex)) {
@@ -254,7 +263,7 @@ export interface StoredMatchCards {
     }
     partnerMatches[item.appId]!.receive.push(...resolveCardIds([item], cardNames));
     if (partnerMatches[item.appId]!.send.length !== partnerMatches[item.appId]!.receive.length) {
-      throw new Error("Sent and received card count don't match for " + partnerMatches[item.appId] + " !");
+      throw new Error(`Sent and received card count don't match for appId ${item.appId}!`);
     }
   }
 

@@ -73,7 +73,7 @@ CI (`.github/workflows/build.yml`) runs typecheck, lint, tests, and build on pus
 ### Layout
 
 - `src/ASF-STM.ts` — userscript source (strict TypeScript, bundled by rolldown).
-- `src/lib/*.ts` — strict TypeScript libs: `models` (canonical type-only declarations), `tradable`, `settings`, `steam-schema` (Zod payload validation), `matcher-core` (pure matching incl. the tradeoffer handoff and its empty-offer diagnosis), `helpers` (pure utilities), `storage` (typed JSON persistence), `scan-resume` (temporary interrupted-scan resume record), `requests` (GM request resolution/GET/retry), `badge-page` (gamecards parser, badge ordering/set sizes), `match-row` (match-row view data), `offer-writer` (offer selection planner), unit-tested via vitest and bundled via normal imports.
+- `src/lib/*.ts` — strict TypeScript libs: `models` (canonical type-only declarations), `tradable`, `settings`, `steam-schema` (Zod payload validation), `matcher-core` (pure matching incl. the tradeoffer handoff and its empty-offer diagnosis), `helpers` (pure utilities), `storage` (typed JSON persistence), `scan-resume` (temporary interrupted-scan resume record), `requests` (GM request resolution/GET/retry), `badge-page` (gamecards parser, badge ordering/set sizes), `match-row` (match-row view data), `offer-writer` (offer selection planner), `bot-sort` (bot-list ordering), unit-tested via vitest and bundled via normal imports.
 - `src/templates/` — HTML/CSS fragments consumed as TypeScript module imports (`*.ts` render functions, `css.css` raw text).
 - `rolldown.config.ts` — bundler config (single-file output, version define, userscript metadata banner).
 - `test/*.test.ts` — vitest suite (plain fixtures, no network; DOM-needing suites use the happy-dom harness with canned documents).
@@ -81,4 +81,4 @@ CI (`.github/workflows/build.yml`) runs typecheck, lint, tests, and build on pus
 
 ### Versioning and releases
 
-The single version source is `package.json` (`1.0.13`). The build injects it into the userscript header, so the shipped file, package metadata, and the release tag always agree. Bumping the version on the default branch (`master`) runs the full pipeline and drafts a GitHub release named `ASF-STM-Enhancement V<version>` carrying the single distributable — the draft must then be published, since Tampermonkey/GreasyFork only pick up published releases.
+The single version source is `package.json` (`1.0.15`). The build injects it into the userscript header, so the shipped file, package metadata, and the release tag always agree. Bumping the version on the default branch (`master`) runs the full pipeline and drafts a GitHub release named `ASF-STM-Enhancement V<version>` carrying the single distributable — the draft must then be published, since Tampermonkey/GreasyFork only pick up published releases.

@@ -17,15 +17,7 @@ export function deepClone<T>(object: T): T {
 
 /** Steam trailing-id helper (account id within the 2^32 space). */
 export function getPartner(str: string): string {
-  if (typeof BigInt !== "undefined") {
-    return (BigInt(str) % BigInt(4294967296)).toString(); // eslint-disable-line
-  } else {
-    let result = 0;
-    for (let i = 0; i < str.length; i++) {
-      result = (result * 10 + Number(str[i])) % 4294967296;
-    }
-    return result.toString();
-  }
+  return (BigInt(str) % BigInt(4294967296)).toString(); // eslint-disable-line
 }
 
 export function arrayToText(array: string[]): string {
@@ -66,7 +58,7 @@ export function rgbaToHex(rgba: string, log: HelperLogger = noop): [string, numb
     return ["#171a21", 0.8];
   }
   return [
-    "#" + Number(result[1]).toString(16) + Number(result[2]).toString(16) + Number(result[3]).toString(16),
+    "#" + [result[1], result[2], result[3]].map((channel) => Number(channel).toString(16).padStart(2, "0")).join(""),
     Number(result[4]),
   ];
 }

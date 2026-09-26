@@ -176,7 +176,7 @@ export function planOfferSelection(
     const tmpCards: Record<string, Array<{ type: string; element: unknown; id: string }>> = {};
     for (const item of pool) {
       // add all matching cards to temporary dict
-      const index = requestedCards.findIndex((elem: string) => elem == item.market_hash_name);
+      const index = requestedCards.findIndex((elem: string) => elem === item.market_hash_name);
       if (index > -1) {
         if (!isTradeOfferItemTradable(item)) {
           continue;

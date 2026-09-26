@@ -78,6 +78,27 @@ describe("calcBadgeState", () => {
     assert.equal(calcBadgeState(badge(1, [3, 1, 1, 1])), 1);
   });
 
+  it("computes the same state for unsorted cards", () => {
+    // Counts [1,1,1,3] unsorted: min 1 == maxSets 1 and max 3 != lastSet 2,
+    // so the state is 1. Positional code reading cards[3] as the min returns
+    // 0 here instead.
+    const unsorted: MatchBadge = {
+      appId: 1,
+      title: "Game 1",
+      maxCards: 4,
+      maxSets: 1,
+      lastSet: 2,
+      cards: [1, 1, 1, 3].map((count, index) => ({
+        item: `card-${index}`,
+        hash: `1-hash-${index}`,
+        count,
+        iconUrl: `icon-${index}`,
+        number: index,
+      })),
+    };
+    assert.equal(calcBadgeState(unsorted), 1);
+  });
+
   it("returns 0 when fewer than max sets exist", () => {
     // total 9 / 4 slots -> maxSets 2; sorted top slot 4 != 2
     assert.equal(calcBadgeState(badge(1, [1, 2, 2, 4])), 0);

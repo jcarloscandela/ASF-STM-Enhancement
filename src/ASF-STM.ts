@@ -8,6 +8,7 @@ import { renderConfigDialog } from "./templates/configDialogTemplate";
 import { renderMainContent } from "./templates/mainContentTemplate";
 import { renderMatch } from "./templates/matchTemplate";
 import { renderRow } from "./templates/rowTemplate";
+import { renderScanFilterElement } from "./templates/scanFilterTemplate";
 import { loadSettings, resetSettings, resolveScanPlan, saveSettings } from "./lib/settings";
 import type { ScanPlan } from "./lib/settings";
 import { parseInventoryAsset, parseInventoryDescription } from "./lib/steam-schema";
@@ -64,18 +65,10 @@ import {
   type BadgeDataset,
 } from "./lib/dataset";
 import badgeCardsJson from "../data/badge_cards.json";
-import {
-  arrayToText,
-  deepClone,
-  getPartner,
-  hexToRgba,
-  mixAlpha,
-  rgbaToHex,
-  sanitizeNickname,
-  textToArray,
-} from "./lib/helpers";
+import { arrayToText, getPartner, hexToRgba, mixAlpha, rgbaToHex, sanitizeNickname, textToArray } from "./lib/helpers";
 import { readJson, STORAGE_KEYS, writeJson } from "./lib/storage";
 import { clearBotCache, loadBotCache, saveBotCache } from "./lib/bot-cache";
+import { compareBots } from "./lib/bot-sort";
 import { gmGet, resolveRequestFunction, retryDelay } from "./lib/requests";
 import type { GmRequestFunction, GmRequestResponse, ModernGmApi } from "./lib/requests";
 import type {
@@ -194,6 +187,9 @@ declare const unsafeWindow: any;
   }
   function debugPrint(msg: unknown): void {
     if (globalSettings.debug) {
+      // Thunks stay lazy: expensive arguments (e.g. JSON dumps) serialize
+      // only when debug output is actually enabled.
+      const text = typeof msg === "function" ? (msg as () => unknown)() : msg;
       console.log(
         new Date().toLocaleTimeString("en-GB", {
           hour12: false,
@@ -203,25 +199,10 @@ declare const unsafeWindow: any;
           fractionalSecondDigits: 3,
         }) +
           " : " +
-          msg,
+          text,
       );
     }
   }
-  function createScanFilterElement(active: boolean, appId: string | number, gameName: string): string {
-    return `
-            <div id="scan-filter-${appId}" class="friendBlock" style="cursor: auto;">
-                <div class="playerAvatar ${active ? "ingame" : "offline"}">
-                    <a target="_blank" rel="noopener noreferrer" href="https://steamcommunity.com/${myProfileLink}/gamecards/${appId}/">
-                        <img class="stretch" src="https://steamcdn-a.akamaihd.net/steam/apps/${appId}/capsule_184x69.jpg">
-                    </a>
-                </div>
-                <div id="scan-filter-name-${appId}" class="friendBlockContent">${gameName}<br>
-                    <input type="checkbox" data-app-id="${appId}" ${active ? "checked" : ""}>
-                </div>
-            </div>
-        `.replaceAll(/(  |\n)/g, "");
-  }
-
   function ShowConfigDialog() {
     let filterBG = rgbaToHex(globalSettings.filterBackgroundColor, debugPrint);
     const questionmarkURL = "https://store.cloudflare.steamstatic.com/public/shared/images/ico/icon_questionmark.png";
@@ -258,7 +239,7 @@ declare const unsafeWindow: any;
       x.title < y.title ? -1 : x.title > y.title ? 1 : (x.appid as number) - (y.appid as number),
     ); // FIXME Add try catch on read and reset settings
     const scanFiltersTemplate = globalSettings.scanFilters
-      .map((x) => createScanFilterElement(x.active, x.appId, x.title))
+      .map((x) => renderScanFilterElement(x.active, x.appId, x.title, myProfileLink))
       .join("");
 
     const sortSelectsHtml = Array.from({ length: 4 }, (_, i) => createSortSelect(i)).join("");
@@ -371,7 +352,7 @@ declare const unsafeWindow: any;
 
   function SaveParams() {
     tradeParams.cardNames = Array.from(cardNames);
-    debugPrint(JSON.stringify(tradeParams.filter));
+    debugPrint(() => JSON.stringify(tradeParams.filter));
     writeJson(localStorage, STORAGE_KEYS.params, tradeParams);
   }
 
@@ -383,7 +364,7 @@ declare const unsafeWindow: any;
     if (Number(appId) <= 0) {
       return { success: false, message: "Invalid AppID" };
     }
-    if (globalSettings.scanFilters.findIndex((x) => x.appId == appId) != -1) {
+    if (globalSettings.scanFilters.findIndex((x) => String(x.appId) === appId) != -1) {
       return { success: false, message: "Filter exists" };
     }
     globalSettings.scanFilters.push({ appId: appId, title: appId, active: true });
@@ -502,7 +483,7 @@ declare const unsafeWindow: any;
     for (let i = 0; i < itemsToSend.length; i++) {
       let appId = itemsToSend[i]!.appId;
       appIdList.push(appId);
-      let itemToReceive = itemsToReceive.find((a) => a.appId == appId);
+      let itemToReceive = itemsToReceive.find((a) => a.appId === appId);
       let gameName = itemsToSend[i]!.title;
 
       //remove placeholder
@@ -583,9 +564,9 @@ declare const unsafeWindow: any;
   // the userscript's host state (bot flags, card-name table, persistence).
   function compareCards(index: number, callback: () => void): void {
     debugPrint("bot's cards");
-    debugPrint(JSON.stringify(botBadges));
+    debugPrint(() => JSON.stringify(botBadges));
     debugPrint("our cards");
-    debugPrint(JSON.stringify(myBadges));
+    debugPrint(() => JSON.stringify(myBadges));
 
     const result = computeMatches(myBadges, botBadges, index, {
       debugPrint,
@@ -593,9 +574,9 @@ declare const unsafeWindow: any;
     });
 
     debugPrint("items to send");
-    debugPrint(JSON.stringify(result.itemsToSend));
+    debugPrint(() => JSON.stringify(result.itemsToSend));
     debugPrint("items to receive");
-    debugPrint(JSON.stringify(result.itemsToReceive));
+    debugPrint(() => JSON.stringify(result.itemsToReceive));
     bots!.Result[index]!.itemsToSend = result.itemsToSend;
     bots!.Result[index]!.itemsToReceive = result.itemsToReceive;
     if (result.itemsToSend.length > 0) {
@@ -751,7 +732,7 @@ declare const unsafeWindow: any;
         if (perApp !== undefined) {
           newcard.tradableCount = perApp[card.markethash]?.tradable ?? 0;
         }
-        debugPrint(JSON.stringify(newcard));
+        debugPrint(() => JSON.stringify(newcard));
         badge.cards.push(newcard);
         cardNames.add(card.markethash);
       }
@@ -836,7 +817,7 @@ declare const unsafeWindow: any;
               return;
             }
             debugPrint("processing badge " + entry.appId);
-            if (xhr.response != undefined && xhr.response.eresult == 1) {
+            if (xhr.response != undefined && xhr.response.eresult === 1) {
               if (xhr.response.badgedata.rgCards.length >= 5) {
                 errors = 0;
                 fillCards(entry.badge, xhr.response.badgedata.rgCards);
@@ -848,7 +829,7 @@ declare const unsafeWindow: any;
                 return;
               } else {
                 debugPrint("less than 5 cards in a badge - something is wrong");
-                debugPrint(JSON.stringify(xhr.response));
+                debugPrint(() => JSON.stringify(xhr.response));
                 errors++;
               }
             } else {
@@ -861,7 +842,7 @@ declare const unsafeWindow: any;
             }
           } catch (error) {
             debugPrint(error);
-            debugPrint(JSON.stringify(xhr.response));
+            debugPrint(() => JSON.stringify(xhr.response));
             errors++;
           }
         } else {
@@ -918,7 +899,7 @@ declare const unsafeWindow: any;
 
       debugTime("Filter and sort");
       for (let i = myBadges.length - 1; i >= 0; i--) {
-        debugPrint("badge " + i + JSON.stringify(myBadges[i]!));
+        debugPrint(() => "badge " + i + JSON.stringify(myBadges[i]!));
 
         sortBadgeCardsDesc(myBadges[i]!);
         if (!hasMatchableDistribution(myBadges[i]!)) {
@@ -938,7 +919,7 @@ declare const unsafeWindow: any;
       if (globalSettings.autoDeleteScanFilters) {
         const inactiveScanFilters = globalSettings.scanFilters.filter((x) => !x.active);
         const activeValidScanFilters = globalSettings.scanFilters.filter(
-          (aFilter) => aFilter.active && myBadges.find((aBadge) => aFilter.appId == aBadge.appId),
+          (aFilter) => aFilter.active && myBadges.find((aBadge) => String(aFilter.appId) === String(aBadge.appId)),
         );
         globalSettings.scanFilters = inactiveScanFilters.concat(activeValidScanFilters);
       }
@@ -946,7 +927,7 @@ declare const unsafeWindow: any;
       /* Add badges with duplicates in scan filters. */
       if (globalSettings.autoAddScanFilters) {
         const addToScanFilters = myBadges.filter(
-          (aBadge) => !globalSettings.scanFilters.find((aFilter) => aFilter.appId == aBadge.appId),
+          (aBadge) => !globalSettings.scanFilters.find((aFilter) => String(aFilter.appId) === String(aBadge.appId)),
         );
         const newScanFilters = Array.from(addToScanFilters, (aBadge) => ({
           appId: aBadge.appId,
@@ -1011,7 +992,7 @@ declare const unsafeWindow: any;
     // scan bot badge step
     if (index === 0) {
       botBadges.length = 0;
-      botBadges = deepClone(myBadges);
+      botBadges = structuredClone(myBadges);
       for (let i = 0; i < botBadges.length; i++) {
         botBadges[i]!.cards.length = 0;
       }
@@ -1069,7 +1050,7 @@ declare const unsafeWindow: any;
             if (parseResult.kind === "ok") {
               botBadges[index]!.maxCards = parseResult.maxCards;
               for (const parsed of parseResult.cards) {
-                debugPrint(JSON.stringify(parsed));
+                debugPrint(() => JSON.stringify(parsed));
                 botBadges[index]!.cards.push(parsed);
               }
             }
@@ -1077,6 +1058,10 @@ declare const unsafeWindow: any;
               debugPrint(
                 `Card "${parseResult.unmatched}" not found in badge ${botBadges[index]!.appId}, skipping badge for this partner`,
               );
+              // Product decision deferred: dropping the partner badge also
+              // drops the user's badge below for every later partner. If a
+              // partner's page is merely malformed, the user's badge arguably
+              // should survive for the remaining partners.
               botBadges.splice(index, 1);
               myBadges.splice(index, 1);
               progressRadials.botBadges.currentStep--;
@@ -1190,7 +1175,7 @@ declare const unsafeWindow: any;
 
     debugTime("Filter and sort");
     for (let i = botBadges.length - 1; i >= 0; i--) {
-      debugPrint("badge " + i + JSON.stringify(botBadges[i]!));
+      debugPrint(() => "badge " + i + JSON.stringify(botBadges[i]!));
 
       sortBadgeCardsDesc(botBadges[i]!);
       const totalCards = applyBadgeSetSizes(botBadges[i]!);
@@ -1374,13 +1359,8 @@ declare const unsafeWindow: any;
     return inventory;
   }
 
-  /* Tradability helpers (isTradableDescription, buildInventoryCardCounts,
-       resolveOwnedCount, buildScanEligibility) live in src/lib/tradable.js and
-       are inlined here by script/build.py so dist stays single-file. */
   // Tradability helpers arrive via the ./lib/tradable import at the top of this file.
 
-  /* Settings helpers (mergeWithDefaults, resolveScanPlan) live in
-       src/lib/settings.js and are inlined here by script/build.py. */
   // Settings helpers arrive via the ./lib/settings import at the top of this file.
 
   // Per-game badge data resolution: single bundled dataset -> browser
@@ -1499,7 +1479,7 @@ declare const unsafeWindow: any;
     statusElement.style.opacity = "1";
     statusElement.innerText = response.message;
     if (response.success) {
-      const newScanFilter = createScanFilterElement(true, appId, appId);
+      const newScanFilter = renderScanFilterElement(true, appId, appId, myProfileLink);
       document.querySelector("#asf-stm-filters")!.innerHTML += newScanFilter;
       statusElement.style.color = "#88ff88";
     } else {
@@ -1527,7 +1507,7 @@ declare const unsafeWindow: any;
       return `Invalid appId: ${appId}`;
     }
     const title = selector.split("</span")[0] as string;
-    globalSettings.scanFilters.find((x) => x.appId == appId)!.title = title;
+    globalSettings.scanFilters.find((x) => String(x.appId) === appId)!.title = title;
     const anchor = document.querySelector(`#scan-filter-name-${appId}`);
     if (anchor) {
       Array.from(anchor.childNodes).find((x) => x.nodeType === Node.TEXT_NODE)!.nodeValue = title;
@@ -1694,7 +1674,7 @@ declare const unsafeWindow: any;
       return;
     }
     if (!globalSettings.matchFriends) {
-      bots!.Result.sort(botSorter);
+      bots!.Result.sort((a, b) => compareBots(a, b, globalSettings.sortBotsBy));
     }
     disableButton();
     debugPrint(new Date(Date.now()));
@@ -1778,42 +1758,6 @@ declare const unsafeWindow: any;
     }
   }
 
-  function botSorter(a: BotEntry, b: BotEntry): number {
-    let result = 0;
-    for (let i = 0; i < globalSettings.sortBotsBy.length; i++) {
-      switch (globalSettings.sortBotsBy[i]) {
-        case "MatchEverythingFirst":
-          result = Number(b.MatchEverything) - Number(a.MatchEverything);
-          break;
-        case "MatchEverythingLast":
-          result = Number(a.MatchEverything) - Number(b.MatchEverything);
-          break;
-        case "TotalGamesCountDesc":
-          result = Number(b.TotalGamesCount) - Number(a.TotalGamesCount);
-          break;
-        case "TotalGamesCountAsc":
-          result = Number(a.TotalGamesCount) - Number(b.TotalGamesCount);
-          break;
-        case "TotalItemsCountDesc":
-          result = Number(b.TotalItemsCount) - Number(a.TotalItemsCount);
-          break;
-        case "TotalItemsCountAsc":
-          result = Number(a.TotalItemsCount) - Number(b.TotalItemsCount);
-          break;
-        case "TotalInventoryCountDesc":
-          result = b.TotalInventoryCount - a.TotalInventoryCount;
-          break;
-        case "TotalInventoryCountAsc":
-          result = a.TotalInventoryCount - b.TotalInventoryCount;
-          break;
-      }
-      if (result !== 0) {
-        break;
-      }
-    }
-    return result;
-  }
-
   function fetchBots(pendingPlan?: ScanPlan): void {
     let requestUrl = "https://asf.justarchi.net/Api/Listing/Bots";
     if (globalSettings.matchFriends) {
@@ -1834,7 +1778,7 @@ declare const unsafeWindow: any;
             "Can't fetch list of bots",
           );
           debugPrint("can't fetch list of bots, ERROR=" + response.status);
-          debugPrint(JSON.stringify(response));
+          debugPrint(() => JSON.stringify(response));
           return;
         }
         try {
@@ -1875,7 +1819,7 @@ declare const unsafeWindow: any;
             };
           } else {
             let re = /("SteamID":)(\d+)/g;
-            let fixedJson = (response.response ?? response.responseText).replace(re, '$1"$2"'); //because fuck js
+            let fixedJson = (response.response ?? response.responseText).replace(re, '$1"$2"'); // Steam emits SteamID as a bare 64-bit integer, which loses precision in JS parsing, so quote it first
             bots = JSON.parse(fixedJson);
             bots!.friends = false;
           }
@@ -1895,7 +1839,7 @@ declare const unsafeWindow: any;
             );
             debugPrint("can't fetch list of bots");
             debugPrint(bots!.Message);
-            debugPrint(JSON.stringify(response));
+            debugPrint(() => JSON.stringify(response));
             return;
           }
           return;
@@ -1907,7 +1851,7 @@ declare const unsafeWindow: any;
           );
           debugPrint("can't fetch list of bots");
           debugPrint(e);
-          debugPrint(JSON.stringify(response));
+          debugPrint(() => JSON.stringify(response));
           return;
         }
       },
@@ -1918,7 +1862,7 @@ declare const unsafeWindow: any;
           "Can't fetch list of bots",
         );
         debugPrint("can't fetch list of bots");
-        debugPrint(JSON.stringify(response));
+        debugPrint(() => JSON.stringify(response));
       },
       onabort: function (response: unknown) {
         disableButton();
@@ -1927,7 +1871,7 @@ declare const unsafeWindow: any;
           "Can't fetch list of bots",
         );
         debugPrint("can't fetch list of bots - aborted");
-        debugPrint(JSON.stringify(response));
+        debugPrint(() => JSON.stringify(response));
       },
       ontimeout: function (response: unknown) {
         disableButton();
@@ -1936,7 +1880,7 @@ declare const unsafeWindow: any;
           "Can't fetch list of bots",
         );
         debugPrint("can't fetch list of bots - timeout");
-        debugPrint(JSON.stringify(response));
+        debugPrint(() => JSON.stringify(response));
       },
     });
   }
@@ -2095,7 +2039,7 @@ declare const unsafeWindow: any;
       }
       if (shortfalls.length > 0) {
         const detail = formatShortfallMessage(shortfalls);
-        debugPrint("unsupplied cards: " + JSON.stringify(shortfalls));
+        debugPrint(() => "unsupplied cards: " + JSON.stringify(shortfalls));
         unsafeWindow.ShowAlertDialog("Items missing", detail);
         throw "Cards missing";
       }
@@ -2103,7 +2047,7 @@ declare const unsafeWindow: any;
       // Type parity is a live-inventory veto: check before moving anything so
       // a non-1:1 trade leaves zero moves (empty offer, never partial).
       if (!isOneToOneTrade(plan.cardTypes)) {
-        debugPrint("non-1:1 card types: " + JSON.stringify(plan.cardTypes));
+        debugPrint(() => "non-1:1 card types: " + JSON.stringify(plan.cardTypes));
         unsafeWindow.ShowAlertDialog(
           "Not 1:1 trade",
           "This is not a valid 1:1 trade. No items were added. Script aborting.",
@@ -2252,21 +2196,23 @@ declare const unsafeWindow: any;
         const partnerKey = vars.partner as string;
         handoffPartnerKey = partnerKey;
         handoffMatchParam = vars.match;
-        debugPrint("trade partner keys tried: " + JSON.stringify(tradePartnerKeyCandidates(partnerKey, getPartner)));
+        debugPrint(
+          () => "trade partner keys tried: " + JSON.stringify(tradePartnerKeyCandidates(partnerKey, getPartner)),
+        );
         const filter = resolveTradeFilter(vars.match, params.filter);
-        debugPrint("trade appid filter: " + JSON.stringify(filter));
+        debugPrint(() => "trade appid filter: " + JSON.stringify(filter));
         let matches: Record<string, StoredMatchCards>;
         try {
           matches = resolvePartnerMatches(params.matches, partnerKey, getPartner);
         } catch {
           throw new Error("no matches with this partner");
         }
-        debugPrint(JSON.stringify(matches));
+        debugPrint(() => JSON.stringify(matches));
         const onSkipCard = (card: number): void => {
           debugPrint("skipping unknown card id: " + card);
         };
         let Cards: string[][] = resolveTradeCards(matches, filter, params.cardNames, onSkipCard);
-        debugPrint(JSON.stringify(Cards));
+        debugPrint(() => JSON.stringify(Cards));
 
         if (Cards[0]!.length !== Cards[1]!.length) {
           unsafeWindow.ShowAlertDialog(
@@ -2309,7 +2255,7 @@ declare const unsafeWindow: any;
               cardNames: handoffParams.cardNames,
               cause: e,
             });
-            debugPrint("trade setup diagnosis: " + JSON.stringify(diagnosis));
+            debugPrint(() => "trade setup diagnosis: " + JSON.stringify(diagnosis));
             detail = "Could not prepare the trade offer.\n" + formatTradeSetupMessage(diagnosis);
           } catch {
             detail =

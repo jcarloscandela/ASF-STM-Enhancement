@@ -97,6 +97,11 @@ describe("rgbaToHex", () => {
     rgbaToHex("rgba(1,2,3,0.5)", (m) => messages.push(m));
     assert.deepEqual(messages, []);
   });
+
+  it("zero-pads channels below 16 to six-digit hex", () => {
+    assert.deepEqual(rgbaToHex("rgba(10,20,30,1)"), ["#0a141e", 1]);
+    assert.deepEqual(rgbaToHex("rgba(0,0,0,0.5)"), ["#000000", 0.5]);
+  });
 });
 
 describe("mixAlpha", () => {

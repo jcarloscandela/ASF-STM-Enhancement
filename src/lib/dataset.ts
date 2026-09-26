@@ -52,7 +52,7 @@ export function expandBundledIconUrl(icon: string): string {
 export interface BadgeCardCacheEntry {
   size?: number;
   name?: string;
-  cards?: Array<{ hash: string; title?: string; iconUrl?: string }>;
+  cards?: BadgeDatasetCard[];
 }
 
 /** The browser-persisted card cache: appId -> entry. */
@@ -318,16 +318,14 @@ export function writeBadgeCardCacheEntry(
   writeJson(storage, BADGE_CARDS_STORAGE_KEY, cache);
 }
 
-/**
- * Merges the single bundled dataset and the browser cache for one game: the
+/** Merges the single bundled dataset and the browser cache for one game: the
  * bundled entry wins on conflicts, then the cache fills in what the dataset
- * lacks.
- */
+ * lacks. */
 export function resolveBadgeEntry(
   dataset: BadgeDataset,
   cache: BadgeCardCache,
   appId: number,
-): { size?: number; name?: string; cards?: Array<{ hash: string; title?: string; iconUrl?: string }> } {
+): { size?: number; name?: string; cards?: BadgeDatasetCard[] } {
   const datasetEntry = dataset[String(appId)];
   const cacheEntry = cache[String(appId)];
   return {

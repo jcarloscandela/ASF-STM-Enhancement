@@ -25,7 +25,7 @@ treats every owned copy as tradable. Candidate badge details
 resolve from the single bundled card dataset and a browser card cache first; covered games need
 no badge-detail request at all on the first run — cards render with bundled
 titles and artwork. Badge-detail requests run serially (never parallel) and
-only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.13`, new home
+only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.15`, new home
 `https://github.com/jcarloscandela/ASF-STM-Enhancement`.
 
 ## Layout
@@ -42,7 +42,8 @@ only for games whose card data is not yet known. An interrupted badge-detail pha
   classification, rate-limit circuit breaker), `badge-page` (gamecards-page
   parser, badge ordering/set-size normalization), `match-row` (match-row
   view-data builders), `offer-writer` (trade-offer selection planner,
-  live-pool normalization, exhaustion diagnostics, readiness poll). All unit-tested via vitest and bundled via normal imports.
+  live-pool normalization, exhaustion diagnostics, readiness poll), `bot-sort`
+  (bot-list ordering table). All unit-tested via vitest and bundled via normal imports.
   `src/ASF-STM.ts` keeps only thin host wiring (XHR shells, DOM building,
   cookies, timers); behavior lives in `src/lib/*`.
 - `src/templates/` — HTML/CSS fragments consumed as TypeScript module
