@@ -295,6 +295,63 @@ describe("buildInventoryCardCounts", () => {
     });
   });
 
+  it("resolves per-copy verdicts by classid-instanceid pair", () => {
+    // Two descriptions share classid "100" (distinct instanceids) with mixed
+    // verdicts; each asset matches its own pair, so each counts with its own
+    // verdict instead of collapsing to the last write.
+    const tradableDesc = cardDescription({ classid: "100", instanceid: "200", tradable: 1 });
+    const heldDesc = cardDescription({ classid: "100", instanceid: "201", tradable: 0 });
+    const inventory: InventoryData = {
+      descriptions: [tradableDesc, heldDesc],
+      assets: [asset("100", "200"), asset("100", "201")],
+    };
+    assert.deepEqual(buildInventoryCardCounts(inventory), {
+      753: { "Game-Card A": { owned: 2, tradable: 1 } },
+    });
+  });
+
+  it("resolves per-copy verdicts regardless of description order", () => {
+    // Reversed verdict order must yield the same per-pair outcome: pair
+    // resolution (not last-wins) decides, so scan tradable can no longer be
+    // inflated by a tradable description shadowing a held copy.
+    const heldDesc = cardDescription({ classid: "100", instanceid: "200", tradable: 0 });
+    const tradableDesc = cardDescription({ classid: "100", instanceid: "201", tradable: 1 });
+    const inventory: InventoryData = {
+      descriptions: [heldDesc, tradableDesc],
+      assets: [asset("100", "200"), asset("100", "201")],
+    };
+    assert.deepEqual(buildInventoryCardCounts(inventory), {
+      753: { "Game-Card A": { owned: 2, tradable: 1 } },
+    });
+  });
+
+  it("covers a pair-mismatched asset with a lone same-classid description", () => {
+    // No description carries the asset's pair, but exactly one shares its
+    // classid: the asset counts with that verdict, preserving the previous
+    // behavior for payloads without per-copy descriptions.
+    const inventory: InventoryData = {
+      descriptions: [cardDescription({ classid: "100", instanceid: "200", tradable: 1 })],
+      assets: [asset("100", "999")],
+    };
+    assert.deepEqual(buildInventoryCardCounts(inventory), {
+      753: { "Game-Card A": { owned: 1, tradable: 1 } },
+    });
+  });
+
+  it("keeps last-wins for ambiguous descriptions without a pair match", () => {
+    // Several descriptions share the classid and none matches the asset's
+    // pair: unresolvable per-copy, so the previous last-wins behavior stays.
+    const tradableDesc = cardDescription({ classid: "100", instanceid: "200", tradable: 1 });
+    const heldDesc = cardDescription({ classid: "100", instanceid: "201", tradable: 0 });
+    const inventory: InventoryData = {
+      descriptions: [tradableDesc, heldDesc],
+      assets: [asset("100", "999")],
+    };
+    assert.deepEqual(buildInventoryCardCounts(inventory), {
+      753: { "Game-Card A": { owned: 1, tradable: 0 } },
+    });
+  });
+
   it("skips descriptions without market_fee_app or market_hash_name", () => {
     const noApp = cardDescription({ classid: "104", instanceid: "204", market_fee_app: undefined });
     const noHash = cardDescription({ classid: "105", instanceid: "205", market_hash_name: undefined });

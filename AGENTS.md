@@ -15,7 +15,8 @@ offers are capped at owned copies above the applicable set target, further
 limited to currently-tradable copies (offerable =
 `max(min(tradable, owned − target), 0)` — the retained owned copies are never
 spent, while a tradable copy above them is offerable even when every other
-owned copy is held), fair partners are only asked for cards they can spare while keeping at
+owned copy is held, with each copy's tradability resolved from its own
+inventory description), fair partners are only asked for cards they can spare while keeping at
 least one copy (and only take badge-neutral swaps), while any-cards (ANY-mode)
 partners are treated as pure card sources — they only need to own the card
 (`owned > 0`), even their last copy — badges reach bot checks only when a receivable slot and
@@ -24,7 +25,7 @@ treats every owned copy as tradable. Candidate badge details
 resolve from the single bundled card dataset and a browser card cache first; covered games need
 no badge-detail request at all on the first run — cards render with bundled
 titles and artwork. Badge-detail requests run serially (never parallel) and
-only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.12`, new home
+only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.13`, new home
 `https://github.com/jcarloscandela/ASF-STM-Enhancement`.
 
 ## Layout
@@ -41,7 +42,7 @@ only for games whose card data is not yet known. An interrupted badge-detail pha
   classification, rate-limit circuit breaker), `badge-page` (gamecards-page
   parser, badge ordering/set-size normalization), `match-row` (match-row
   view-data builders), `offer-writer` (trade-offer selection planner,
-  live-pool normalization, readiness poll). All unit-tested via vitest and bundled via normal imports.
+  live-pool normalization, exhaustion diagnostics, readiness poll). All unit-tested via vitest and bundled via normal imports.
   `src/ASF-STM.ts` keeps only thin host wiring (XHR shells, DOM building,
   cookies, timers); behavior lives in `src/lib/*`.
 - `src/templates/` — HTML/CSS fragments consumed as TypeScript module

@@ -325,6 +325,23 @@ describe("computeMatches", () => {
     assert.deepEqual(sideShape(first.itemsToSend), sideShape(second.itemsToSend));
     assert.deepEqual(sideShape(first.itemsToReceive), sideShape(second.itemsToReceive));
   });
+
+  it("never promises one card twice beyond its offerable surplus (Geist matrix)", () => {
+    // Geist shape: owned 2 with 1 tradable plus missing cards; the offerable
+    // surplus is max(min(1, 2 - 1), 0) = 1. Within a single pass the matcher
+    // must send that card at most once, no matter how generous the partner.
+    // Passes on current code (per-send decrements); discriminates the matrix
+    // toward inflated scan inputs rather than matcher double-promises.
+    const mine = [badge(252010, [2, 1, 0, 0, 0], [1, 1, 0, 0, 0])];
+    const theirs = [badge(252010, [2, 2, 2, 2, 2])];
+    const result = computeMatches(mine, theirs, 0, deps({ isMatchEverything: () => true }));
+    const geistSent = result.itemsToSend
+      .flatMap((item) => item.cards)
+      .filter((card) => card.hash === "252010-hash-0")
+      .reduce((sum, card) => sum + card.count, 0);
+    assert.ok(geistSent <= 1, `single tradable copy promised at most once, got ${geistSent}`);
+    assert.equal(cardCount(result.itemsToSend), cardCount(result.itemsToReceive));
+  });
 });
 
 describe("resolveCardIds", () => {

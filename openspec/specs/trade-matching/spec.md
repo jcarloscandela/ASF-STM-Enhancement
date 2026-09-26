@@ -32,7 +32,7 @@ The scanner SHALL determine the tradability of each owned card from the Steam in
 
 ### Requirement: Badge counts separate owned copies from tradable capacity
 
-The scanner SHALL maintain, per card of the user's badges, both the owned copy count (all copies, as reported by the Steam badge page) and the currently tradable copy count (from the inventory scan when available). Set-progress decisions - badge state, set targets (`maxSets`/`lastSet`), whether a card is still needed, and the nothing-to-match badge filter - SHALL use owned counts, so a card the user already owns is never requested from a partner even when every owned copy is temporarily held. Offer decisions SHALL retain owned copies and cap at tradable copies: the number of copies offered of a card SHALL NOT exceed `offerable = max(min(tradable, owned − target), 0)`, where the target is the copies the badge must retain (one for first-set completion) - so the retained owned copies are never offered, while a tradable copy above the retained owned count is offerable even when every other owned copy is held. A card SHALL be offered only while it both owns more than the target (`owned > target`) and holds at least one currently-tradable copy (`tradable ≥ 1`). When tradability is unknown, the tradable count of a card SHALL equal its owned count (badge-page fallback), which collapses the formula back to the owned surplus, and the same rule SHALL apply.
+The scanner SHALL maintain, per card of the user's badges, both the owned copy count (all copies, as reported by the Steam badge page) and the currently tradable copy count (from the inventory scan when available). Set-progress decisions - badge state, set targets (`maxSets`/`lastSet`), whether a card is still needed, and the nothing-to-match badge filter - SHALL use owned counts, so a card the user already owns is never requested from a partner even when every owned copy is temporarily held. Offer decisions SHALL retain owned copies and cap at tradable copies: the number of copies offered of a card SHALL NOT exceed `offerable = max(min(tradable, owned − target), 0)`, where the target is the copies the badge must retain (one for first-set completion) - so the retained owned copies are never offered, while a tradable copy above the retained owned count is offerable even when every other owned copy is held. A card SHALL be offered only while it both owns more than the target (`owned > target`) and holds at least one currently-tradable copy (`tradable ≥ 1`). When tradability is unknown, the tradable count of a card SHALL equal its owned count (badge-page fallback), which collapses the formula back to the owned surplus, and the same rule SHALL apply. Each inventory asset SHALL resolve its tradability from the description carrying the same `classid` AND `instanceid` pair, so per-copy holds distinguish copies of one card; when no description carries the asset's pair but exactly one description shares its `classid`, that description SHALL apply; when several share the `classid` with no pair match, the last one SHALL apply as before.
 
 #### Scenario: Owned-but-held card is not requested
 
@@ -68,6 +68,16 @@ The scanner SHALL maintain, per card of the user's badges, both the owned copy c
 
 - **WHEN** the user owns five tradable copies of Card A, one held copy of Card D, and zero copies of Cards B, C, and E, and a fair (non-ANY) partner holds two copies of every card
 - **THEN** no proposed swap requests Card D, the total offered copies of Card A never exceed five, and every match row shows exactly the cards its generated offer will exchange
+
+#### Scenario: Per-copy holds resolve per description pair
+
+- **WHEN** two descriptions share one `classid` with distinct `instanceid`s and mixed tradability verdicts, and one asset matches each pair
+- **THEN** each asset counts with its own pair's verdict (owned 2, tradable 1), so a held copy never inflates the tradable count nor masks the tradable copy
+
+#### Scenario: Lone description covers a pair-mismatched asset
+
+- **WHEN** an asset's `instanceid` matches no description pair but exactly one description shares its `classid`
+- **THEN** the asset counts with that description's verdict, preserving the previous count behavior for payloads without per-copy descriptions
 
 ### Requirement: Match rows display only the exchanged cards
 

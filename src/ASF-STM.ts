@@ -31,6 +31,7 @@ import {
   populateCardsHtml,
 } from "./lib/match-row";
 import {
+  advanceReadinessStreak,
   formatShortfallMessage,
   getRandomOfferIndex,
   isOneToOneTrade,
@@ -2173,7 +2174,16 @@ declare const unsafeWindow: any;
         }
       });
 
-      if (ready === 2) {
+      // Settle gate: plan only once both inventories report fully loaded on
+      // two consecutive polls, so a transient ready between paginated loads
+      // cannot plan against a partial pool.
+      const poll = advanceReadinessStreak(
+        typeof g_v.tradeReadyStreak === "number" ? g_v.tradeReadyStreak : 0,
+        ready === 2,
+      );
+      g_v.tradeReadyStreak = poll.consecutive;
+
+      if (poll.settled) {
         // select your inventory
         unsafeWindow.TradePageSelectInventory(g_v.Users[0], 753, "6");
         // set trade offer message

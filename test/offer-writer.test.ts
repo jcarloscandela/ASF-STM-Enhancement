@@ -130,12 +130,19 @@ describe("planOfferSelection", () => {
         side: 0,
         name: "Card A",
         reason: "unselectable",
-        detail: { poolCopies: 1, flagValues: [false], holdDates: [null] },
+        detail: {
+          poolCopies: 1,
+          flagValues: [false],
+          holdDates: [null],
+          occurrenceIndex: 0,
+          tradablePoolCopies: 0,
+          allocatedCopies: 0,
+        },
       },
     ]);
   });
 
-  it("records the second occurrence of a single copy as unselectable", () => {
+  it("records the second occurrence of a single copy as exhausted", () => {
     const plan = planOfferSelection([["Card A", "Card A"], []], [[poolItem("Card A", "9")], []], "AS_IS");
     assert.equal(plan.failLater, true);
     assert.deepEqual(
@@ -146,8 +153,15 @@ describe("planOfferSelection", () => {
       {
         side: 0,
         name: "Card A",
-        reason: "unselectable",
-        detail: { poolCopies: 1, flagValues: [true], holdDates: [null] },
+        reason: "exhausted",
+        detail: {
+          poolCopies: 1,
+          flagValues: [true],
+          holdDates: [null],
+          occurrenceIndex: 1,
+          tradablePoolCopies: 1,
+          allocatedCopies: 1,
+        },
       },
     ]);
   });
@@ -172,13 +186,27 @@ describe("planOfferSelection", () => {
         side: 0,
         name: "Card A",
         reason: "unselectable",
-        detail: { poolCopies: 1, flagValues: [false], holdDates: [null] },
+        detail: {
+          poolCopies: 1,
+          flagValues: [false],
+          holdDates: [null],
+          occurrenceIndex: 0,
+          tradablePoolCopies: 0,
+          allocatedCopies: 0,
+        },
       },
       {
         side: 1,
         name: "Card B",
         reason: "unselectable",
-        detail: { poolCopies: 1, flagValues: [false], holdDates: [null] },
+        detail: {
+          poolCopies: 1,
+          flagValues: [false],
+          holdDates: [null],
+          occurrenceIndex: 0,
+          tradablePoolCopies: 0,
+          allocatedCopies: 0,
+        },
       },
     ]);
     assert.deepEqual(plan.moves, [[], []]);
@@ -293,6 +321,56 @@ describe("formatShortfallMessage", () => {
     const message = formatShortfallMessage(shortfalls, 10);
     assert.match(message, /\+2 more/);
     assert.doesNotMatch(message, /Card 11/);
+  });
+
+  it("names exhausted counts instead of the held-card wording", () => {
+    const message = formatShortfallMessage([
+      {
+        side: 0,
+        name: "252010-Geist",
+        reason: "exhausted",
+        detail: {
+          poolCopies: 1,
+          flagValues: [true],
+          holdDates: [null],
+          occurrenceIndex: 1,
+          tradablePoolCopies: 1,
+          allocatedCopies: 1,
+        },
+      },
+    ]);
+    assert.match(
+      message,
+      /yours: 252010-Geist \(requested 2, only 1 tradable copy in inventory, 1 already used by this offer\)/,
+    );
+    assert.doesNotMatch(message, /present but not tradable right now/);
+    assert.match(message, /No items were added/);
+  });
+
+  it("mixes absent, unselectable, and exhausted lines", () => {
+    const message = formatShortfallMessage([
+      { side: 0, name: "Ghost", reason: "absent" },
+      { side: 0, name: "Held", reason: "unselectable" },
+      {
+        side: 1,
+        name: "Used",
+        reason: "exhausted",
+        detail: {
+          poolCopies: 2,
+          flagValues: [true, true],
+          holdDates: [null, null],
+          occurrenceIndex: 2,
+          tradablePoolCopies: 2,
+          allocatedCopies: 2,
+        },
+      },
+    ]);
+    assert.match(message, /yours: Ghost \(not in inventory\)/);
+    assert.match(message, /yours: Held \(present but not tradable right now\)/);
+    assert.match(
+      message,
+      /theirs: Used \(requested 3, only 2 tradable copies in inventory, 2 already used by this offer\)/,
+    );
   });
 });
 

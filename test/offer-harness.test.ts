@@ -12,6 +12,7 @@ import { describe, it } from "vitest";
 import assert from "node:assert/strict";
 
 import {
+  advanceReadinessStreak,
   assessTradeReadiness,
   formatShortfallMessage,
   isOneToOneTrade,
@@ -104,6 +105,38 @@ describe("assessTradeReadiness", () => {
   });
 });
 
+describe("advanceReadinessStreak", () => {
+  it("settles only after two consecutive fully-ready polls", () => {
+    let poll = advanceReadinessStreak(0, false);
+    assert.deepEqual(poll, { consecutive: 0, settled: false });
+    poll = advanceReadinessStreak(poll.consecutive, true);
+    assert.deepEqual(poll, { consecutive: 1, settled: false });
+    poll = advanceReadinessStreak(poll.consecutive, true);
+    assert.deepEqual(poll, { consecutive: 2, settled: true });
+  });
+
+  it("resets the streak when a poll is not fully ready", () => {
+    assert.deepEqual(advanceReadinessStreak(1, false), { consecutive: 0, settled: false });
+    assert.deepEqual(advanceReadinessStreak(5, false), { consecutive: 0, settled: false });
+  });
+
+  it("withholds planning across a transient ready between loads", () => {
+    // Simulated poll sequence: loading, loading, ready (page gap), loading,
+    // ready, ready — planning fires only on the final poll.
+    const polls = [false, false, true, false, true, true];
+    let consecutive = 0;
+    const settledAt: number[] = [];
+    polls.forEach((bothReady, index) => {
+      const poll = advanceReadinessStreak(consecutive, bothReady);
+      consecutive = poll.consecutive;
+      if (poll.settled) {
+        settledAt.push(index);
+      }
+    });
+    assert.deepEqual(settledAt, [5]);
+  });
+});
+
 describe("offer selection applied to a canned trade page", () => {
   it("fills both slot areas equally for match=all", () => {
     const { yours, theirs } = tradePage();
@@ -151,6 +184,71 @@ describe("offer selection applied to a canned trade page", () => {
     assert.deepEqual(plan.shortfalls, []);
     assert.equal(plan.moves[0]!.length, 1);
     assert.equal(plan.moves[0]![0]!.id, "3");
+  });
+
+  it("reports the Geist-shaped double request against a single copy (SORT)", () => {
+    // Reported 252010-Geist repro: requested twice, live pool holds one
+    // tradable copy. The first occurrence consumes it; the second occurrence
+    // is exhaustion (already allocated), never a held-card report.
+    const plan = planOfferSelection(
+      [
+        ["Card A", "Card A"],
+        ["Card B", "Card C"],
+      ],
+      [[poolItem("Card A", "1")], [poolItem("Card B", "4"), poolItem("Card C", "5")]],
+      "SORT",
+    );
+    assert.equal(plan.failLater, true);
+    assert.equal(plan.moves[0]!.length, 1);
+    assert.equal(plan.moves[0]![0]!.id, "1");
+    assert.equal(plan.shortfalls.length, 1);
+    assert.equal(plan.shortfalls[0]!.side, 0);
+    assert.equal(plan.shortfalls[0]!.name, "Card A");
+    assert.equal(plan.shortfalls[0]!.reason, "exhausted");
+    assert.equal(plan.shortfalls[0]!.detail?.poolCopies, 1);
+    assert.deepEqual(plan.shortfalls[0]!.detail?.flagValues, [true]);
+    assert.equal(plan.shortfalls[0]!.detail?.occurrenceIndex, 1);
+    assert.equal(plan.shortfalls[0]!.detail?.tradablePoolCopies, 1);
+    assert.equal(plan.shortfalls[0]!.detail?.allocatedCopies, 1);
+    // Gated application mirrors addCards: any shortfall leaves zero moves
+    // applied and surfaces the exhausted wording instead of a held-card abort.
+    const { yours, theirs } = tradePage();
+    const dialogs: Array<[string, string]> = [];
+    if (plan.failLater || plan.shortfalls.length > 0) {
+      dialogs.push(["Items missing", formatShortfallMessage(plan.shortfalls)]);
+    } else {
+      applyMoves([yours, theirs], plan.moves);
+    }
+    assert.equal(yours.querySelectorAll(".has_item").length, 0);
+    assert.equal(theirs.querySelectorAll(".has_item").length, 0);
+    assert.equal(dialogs.length, 1);
+    assert.match(
+      dialogs[0]![1],
+      /yours: Card A \(requested 2, only 1 tradable copy in inventory, 1 already used by this offer\)/,
+    );
+    assert.doesNotMatch(dialogs[0]![1], /present but not tradable right now/);
+  });
+
+  it("reports the Geist-shaped double request against a single copy (RANDOM)", () => {
+    // Same exhaustion shape under RANDOM ordering: one tradable copy fills
+    // the first of two requested occurrences, the second is exhausted.
+    const plan = planOfferSelection(
+      [
+        ["Card A", "Card A"],
+        ["Card B", "Card C"],
+      ],
+      [[poolItem("Card A", "1")], [poolItem("Card B", "4"), poolItem("Card C", "5")]],
+      "RANDOM",
+      () => 0,
+    );
+    assert.equal(plan.failLater, true);
+    assert.equal(plan.moves[0]!.length, 1);
+    assert.equal(plan.shortfalls.length, 1);
+    assert.equal(plan.shortfalls[0]!.reason, "exhausted");
+    assert.equal(plan.shortfalls[0]!.detail?.poolCopies, 1);
+    assert.equal(plan.shortfalls[0]!.detail?.occurrenceIndex, 1);
+    assert.equal(plan.shortfalls[0]!.detail?.tradablePoolCopies, 1);
+    assert.equal(plan.shortfalls[0]!.detail?.allocatedCopies, 1);
   });
 
   it("selects the tradable copy at any id position (SORT)", () => {

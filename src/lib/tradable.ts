@@ -264,11 +264,12 @@ interface CardDescriptionInfo {
   appId: number;
   hash: string;
   tradable: boolean;
+  instanceid: string;
 }
 
 export function buildInventoryCardCounts(inventoryData: InventoryData): InventoryCardCounts {
   const counts: InventoryCardCounts = {};
-  const cardByClassId = new Map<string, CardDescriptionInfo>();
+  const cardByClassId = new Map<string, CardDescriptionInfo[]>();
 
   for (const description of inventoryData.descriptions) {
     const isCard = description.tags?.some(
@@ -289,15 +290,32 @@ export function buildInventoryCardCounts(inventoryData: InventoryData): Inventor
       continue;
     }
 
-    cardByClassId.set(description.classid, {
+    const info: CardDescriptionInfo = {
       appId,
       hash,
       tradable: isCurrentlyTradableDescription(description),
-    });
+      instanceid: description.instanceid,
+    };
+    const known = cardByClassId.get(description.classid);
+    if (known === undefined) {
+      cardByClassId.set(description.classid, [info]);
+    } else {
+      known.push(info);
+    }
   }
 
   for (const asset of inventoryData.assets) {
-    const card = cardByClassId.get(asset.classid);
+    const candidates = cardByClassId.get(asset.classid);
+    if (candidates === undefined || candidates.length === 0) {
+      continue;
+    }
+    // Per-copy verdicts resolve by (classid, instanceid) pair, so mixed holds
+    // across copies of one card never collapse into a single verdict. A lone
+    // same-classid description still covers a pair-mismatched asset; several
+    // without a pair match keep the previous last-wins behavior.
+    const card =
+      candidates.find((candidate) => candidate.instanceid === asset.instanceid) ??
+      (candidates.length === 1 ? candidates[0]! : candidates[candidates.length - 1]!);
     if (!card) {
       continue;
     }

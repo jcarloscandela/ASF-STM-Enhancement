@@ -91,7 +91,7 @@ export interface PlannedMove {
   element: unknown;
 }
 
-/** Per-copy diagnostic facts behind one `unselectable` shortfall. */
+/** Per-copy diagnostic facts behind one `unselectable` or `exhausted` shortfall. */
 export interface UnsuppliedCardDetail {
   /** How many pool copies carried the requested name. */
   poolCopies: number;
@@ -105,6 +105,12 @@ export interface UnsuppliedCardDetail {
    * there; present only for callers that pass inventory counts in).
    */
   scanTradable?: number;
+  /** 0-based index of this occurrence among same-name requests on its side. */
+  occurrenceIndex: number;
+  /** How many tradable pool copies of the name existed before this offer allocated any. */
+  tradablePoolCopies: number;
+  /** How many of those tradable copies earlier occurrences already allocated. */
+  allocatedCopies: number;
 }
 
 /** One requested card occurrence the live inventory could not supply. */
@@ -115,11 +121,12 @@ export interface UnsuppliedCard {
   name: string;
   /**
    * `absent` = no pool item carries that name; `unselectable` = the name is
-   * present but every copy is trade-held/untradable (or already consumed by
-   * an earlier requested occurrence).
+   * present but every unconsumed copy is trade-held/untradable;
+   * `exhausted` = tradable copies existed but earlier occurrences of the
+   * same offer already consumed them all.
    */
-  reason: "absent" | "unselectable";
-  /** Diagnostic facts for `unselectable` shortfalls; absent for `absent`. */
+  reason: "absent" | "unselectable" | "exhausted";
+  /** Diagnostic facts for `unselectable`/`exhausted` shortfalls; absent for `absent`. */
   detail?: UnsuppliedCardDetail;
 }
 
@@ -188,24 +195,37 @@ export function planOfferSelection(
       });
     }
     // add cards to trade in order given by STM
+    const occurrenceSeen: Record<string, number> = {};
+    const initialTradable: Record<string, number> = {};
+    Object.keys(tmpCards).forEach(function (key: string) {
+      initialTradable[key] = tmpCards[key]!.length;
+    });
     requestedCards.forEach(function (elem: string) {
+      const occurrenceIndex = occurrenceSeen[elem] ?? 0;
+      occurrenceSeen[elem] = occurrenceIndex + 1;
       const currentCards = tmpCards[elem] || []; // all cards from inventory with requested signature
       if (currentCards.length === 0) {
         failLater = true;
         const present = pool.filter((item) => item.market_hash_name === elem);
-        if (present.length > 0) {
-          shortfalls.push({
-            side,
-            name: elem,
-            reason: "unselectable",
-            detail: {
-              poolCopies: present.length,
-              flagValues: present.map((item) => item.tradable),
-              holdDates: present.map((item) => getTradableAfterTime(item)),
-            },
-          });
-        } else {
+        if (present.length === 0) {
           shortfalls.push({ side, name: elem, reason: "absent" });
+        } else {
+          const tradableTotal = initialTradable[elem] ?? 0;
+          const occurrenceDetail = {
+            poolCopies: present.length,
+            flagValues: present.map((item) => item.tradable),
+            holdDates: present.map((item) => getTradableAfterTime(item)),
+            occurrenceIndex,
+            tradablePoolCopies: tradableTotal,
+            allocatedCopies: tradableTotal - currentCards.length,
+          };
+          if (tradableTotal > 0) {
+            // Tradable copies existed but earlier occurrences of this offer
+            // consumed them all: exhaustion, never a held-card report.
+            shortfalls.push({ side, name: elem, reason: "exhausted", detail: occurrenceDetail });
+          } else {
+            shortfalls.push({ side, name: elem, reason: "unselectable", detail: occurrenceDetail });
+          }
         }
       } else {
         let pick = 0;
@@ -310,8 +330,22 @@ export function retryUnselectableCopies(
 export function formatShortfallMessage(shortfalls: UnsuppliedCard[], cap = 10): string {
   const lines = shortfalls.slice(0, cap).map((entry) => {
     const side = entry.side === 0 ? "yours" : "theirs";
-    const reason = entry.reason === "absent" ? "not in inventory" : "present but not tradable right now";
-    return `${side}: ${entry.name} (${reason})`;
+    if (entry.reason === "absent") {
+      return `${side}: ${entry.name} (not in inventory)`;
+    }
+    if (entry.reason === "exhausted") {
+      const detail = entry.detail;
+      if (detail !== undefined) {
+        const requested = detail.occurrenceIndex + 1;
+        return (
+          `${side}: ${entry.name} (requested ${requested}, ` +
+          `only ${detail.tradablePoolCopies} tradable cop${detail.tradablePoolCopies === 1 ? "y" : "ies"}` +
+          ` in inventory, ${detail.allocatedCopies} already used by this offer)`
+        );
+      }
+      return `${side}: ${entry.name} (already used up by this offer)`;
+    }
+    return `${side}: ${entry.name} (present but not tradable right now)`;
   });
   if (shortfalls.length > cap) {
     lines.push(`+${shortfalls.length - cap} more (see debug log)`);
@@ -347,6 +381,25 @@ export function assessTradeReadiness(users: TradeReadinessUser[]): number {
     }
   });
   return ready;
+}
+
+/** Settled-readiness poll state for one consecutive-ready streak. */
+export interface ReadinessStreak {
+  consecutive: number;
+  settled: boolean;
+}
+
+/**
+ * Advances the settled-readiness streak by one poll: a fully ready check
+ * extends the streak, anything else resets it. Planning proceeds once the
+ * streak settles (two consecutive fully-ready polls), so a transient ready
+ * between paginated inventory loads cannot trigger planning against a
+ * partial pool and manufacture exhaustion shortfalls for copies present on
+ * unloaded pages.
+ */
+export function advanceReadinessStreak(previousConsecutive: number, bothReady: boolean): ReadinessStreak {
+  const consecutive = bothReady ? previousConsecutive + 1 : 0;
+  return { consecutive, settled: consecutive >= 2 };
 }
 
 /**
