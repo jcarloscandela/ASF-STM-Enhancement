@@ -64,6 +64,7 @@ import {
   type BadgeCardCache,
   type BadgeDataset,
 } from "./lib/dataset";
+import { newBadgeCardsCount, triggerDatasetExport, updateDatasetExportState } from "./lib/dataset-export";
 import badgeCardsJson from "../data/badge_cards.json";
 import { arrayToText, getPartner, hexToRgba, mixAlpha, rgbaToHex, sanitizeNickname, textToArray } from "./lib/helpers";
 import { readJson, STORAGE_KEYS, writeJson } from "./lib/storage";
@@ -259,6 +260,12 @@ declare const unsafeWindow: any;
     configDialog.querySelector("#addScanFilterButton")!.addEventListener("click", addScanFilterEventHandler, false);
     configDialog.querySelector("#clearScanFilters")!.addEventListener("click", clearScanFiltersEventHandler, false);
 
+    // Dataset export tab: truthful button state on open, Blob download on click.
+    updateDatasetExportState(configDialog, newBadgeCardsCount(cardDataset, badgeCardCache));
+    configDialog
+      .querySelector("#downloadBadgeCardsButton")!
+      .addEventListener("click", downloadBadgeCardsExportEventHandler, false);
+
     unsafeWindow.ShowConfirmDialog("ASF STM Configuration", configDialog, "Save", "Cancel", "Reset").done(function (
       button: string,
     ) {
@@ -424,6 +431,23 @@ declare const unsafeWindow: any;
         blacklist.push(steamID);
         SaveConfig();
       });
+  }
+
+  function downloadTextFile(filename: string, text: string): void {
+    const blob = new Blob([text], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadBadgeCardsExportEventHandler(): void {
+    // Empty diffs only refresh the disabled state and never download.
+    triggerDatasetExport(document, cardDataset, badgeCardCache, downloadTextFile);
   }
 
   function filterAllEventHandler(event: Event): void {
@@ -745,6 +769,9 @@ declare const unsafeWindow: any;
         size: badge.maxCards,
         cards: badge.cards.map((card) => ({ hash: card.hash, title: card.item, iconUrl: card.iconUrl })),
       });
+      // An open Dataset tab learns about the new entry without a reload; when
+      // the dialog is closed the query finds nothing and this is a no-op.
+      updateDatasetExportState(document, newBadgeCardsCount(cardDataset, badgeCardCache));
     }
 
     function fetchNext(): void {

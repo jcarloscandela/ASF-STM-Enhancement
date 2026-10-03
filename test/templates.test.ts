@@ -226,6 +226,22 @@ describe("renderConfigDialog", () => {
     );
     assert.match(html, /111\n222/);
   });
+
+  it("renders the Dataset tab with a disabled download button by default", () => {
+    const html = renderConfigDialog(
+      settings(),
+      CONFIG_ARGS.filterBG,
+      CONFIG_ARGS.questionmarkURL,
+      CONFIG_ARGS.sortSelectsHtml,
+      CONFIG_ARGS.blacklistText,
+      CONFIG_ARGS.scanFiltersTemplate,
+    );
+    assert.match(html, /id="asf_stm_tab5"/);
+    assert.match(html, /id="downloadBadgeCardsButton"[^>]*disabled/);
+    assert.match(html, /Download new badge cards/);
+    assert.match(html, /id="datasetExportCount"/);
+    assert.match(html, /data\/badge_cards\.json/);
+  });
 });
 
 describe("css bundle", () => {

@@ -346,6 +346,32 @@ export function renderConfigDialog(
             </fieldset>
           </div>
         </li>
+
+        <li class="asf_stm_tab">
+          <input type="radio" id="asf_stm_tab5" name="asf_stm_tabs" />
+          <label for="asf_stm_tab5">Dataset</label>
+          <div id="asf_stm_tab-content5" class="asf_stm_content">
+            <fieldset>
+              <legend>EXPORT NEW BADGE CARDS</legend>
+              <div class="asf-stm-margin-bottom">
+                <span id="datasetExportCount">0 new entries</span>
+              </div>
+              <div class="asf-stm-margin-bottom">
+                <button id="downloadBadgeCardsButton" class="btn_blue_steamui btn_small asf-stm-margin-right" disabled>
+                  <span>Download new badge cards</span>
+                </button>
+              </div>
+              <div class="asf-stm-margin-bottom">
+                <span>
+                  Downloads the badge-card entries learned by scans that are not yet in the bundled dataset
+                  (<code>badge_cards.json</code>, authoring format). Merge the file into
+                  <code>data/badge_cards.json</code> to cut a new dataset version. The button stays disabled while there
+                  is nothing new to export.
+                </span>
+              </div>
+            </fieldset>
+          </div>
+        </li>
       </ul>
     </div>
   `;

@@ -334,3 +334,82 @@ export function resolveBadgeEntry(
     cards: datasetEntry?.cards ?? cacheEntry?.cards,
   };
 }
+
+/**
+ * Diffs the browser-persisted badge-card cache against the bundled dataset,
+ * returning the not-yet-bundled ("new") entries in authoring shape for export.
+ * A cached game is new when its appId has no bundled entry, or when the
+ * bundled entry is size-only while the cache holds a full card list. A bundled
+ * rich entry suppresses its cache twin, and entries without a usable set size
+ * are skipped. Corrupt cache content never reaches this helper: `readBadgeCardCache`
+ * already drops it, so a corrupt cache diffs to zero new entries.
+ */
+export function diffNewBadgeCardEntries(dataset: BadgeDataset, cache: BadgeCardCache): BadgeDataset {
+  const fresh: BadgeDataset = {};
+  for (const [appId, cacheEntry] of Object.entries(cache)) {
+    if (typeof cacheEntry.size !== "number" || !Number.isFinite(cacheEntry.size) || cacheEntry.size <= 0) {
+      continue;
+    }
+    const cacheCards = Array.isArray(cacheEntry.cards) ? cacheEntry.cards : [];
+    const datasetEntry = dataset[appId];
+    if (datasetEntry === undefined) {
+      // No bundled coverage at all: whatever the cache holds is new.
+    } else if (Array.isArray(datasetEntry.cards) && datasetEntry.cards.length > 0) {
+      continue;
+    } else if (cacheCards.length === 0) {
+      continue;
+    }
+    const entry: BadgeDatasetEntry = { size: cacheEntry.size };
+    if (cacheEntry.name !== undefined) {
+      entry.name = cacheEntry.name;
+    }
+    if (cacheCards.length > 0) {
+      entry.cards = cacheCards.map((card) => {
+        const exported: BadgeDatasetCard = { hash: card.hash };
+        if (card.title !== undefined) {
+          exported.title = card.title;
+        }
+        if (card.iconUrl !== undefined) {
+          exported.iconUrl = card.iconUrl;
+        }
+        return exported;
+      });
+    }
+    fresh[appId] = entry;
+  }
+  return fresh;
+}
+
+/**
+ * Serializes exportable ("new") badge-card entries into the `badge_cards.json`
+ * authoring file shape: long keys (`size`/`name`/`cards` with
+ * `hash`/`title`/`iconUrl`) and full icon URLs, pretty-printed for manual
+ * merge review. Entries without a usable set size are dropped so the output
+ * always loads back through `normalizeDataset`.
+ */
+export function serializeBadgeCardsExport(fresh: BadgeDataset): string {
+  const record: BadgeDataset = {};
+  for (const [appId, entry] of Object.entries(fresh)) {
+    if (typeof entry?.size !== "number" || !Number.isFinite(entry.size) || entry.size <= 0) {
+      continue;
+    }
+    const exported: BadgeDatasetEntry = { size: entry.size };
+    if (entry.name !== undefined) {
+      exported.name = entry.name;
+    }
+    if (Array.isArray(entry.cards) && entry.cards.length > 0) {
+      exported.cards = entry.cards.map((card) => {
+        const serialized: BadgeDatasetCard = { hash: card.hash };
+        if (card.title !== undefined) {
+          serialized.title = card.title;
+        }
+        if (card.iconUrl !== undefined) {
+          serialized.iconUrl = expandBundledIconUrl(card.iconUrl);
+        }
+        return serialized;
+      });
+    }
+    record[appId] = exported;
+  }
+  return JSON.stringify(record, null, 2);
+}
