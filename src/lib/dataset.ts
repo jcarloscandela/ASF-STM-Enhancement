@@ -381,10 +381,62 @@ export function diffNewBadgeCardEntries(dataset: BadgeDataset, cache: BadgeCardC
 }
 
 /**
- * Serializes exportable ("new") badge-card entries into the `badge_cards.json`
+ * Merges the bundled dataset with the not-yet-bundled ("new") diff into the
+ * full exportable archive: every bundled entry plus every new entry, keyed by
+ * appId in ascending numeric order for stable, reviewable diffs.
+ *
+ * Overlap resolution is bundled-wins: a bundled rich entry (full card list)
+ * is kept verbatim even when the diff holds that appId, while a bundled
+ * size-only entry is upgraded by the diff entry (which by construction only
+ * exists when the cache holds its full card list). Entries without a usable
+ * set size are dropped so the output always loads back through
+ * `normalizeDataset`. Inputs are never mutated.
+ */
+export function mergeBadgeCardsForExport(dataset: BadgeDataset, fresh: BadgeDataset): BadgeDataset {
+  const merged: BadgeDataset = {};
+  for (const [appId, entry] of Object.entries(dataset)) {
+    if (typeof entry?.size !== "number" || !Number.isFinite(entry.size) || entry.size <= 0) {
+      continue;
+    }
+    const copied: BadgeDatasetEntry = { size: entry.size };
+    if (entry.name !== undefined) {
+      copied.name = entry.name;
+    }
+    if (Array.isArray(entry.cards) && entry.cards.length > 0) {
+      copied.cards = entry.cards.map((card) => ({ ...card }));
+    }
+    merged[appId] = copied;
+  }
+  for (const [appId, entry] of Object.entries(fresh)) {
+    if (typeof entry?.size !== "number" || !Number.isFinite(entry.size) || entry.size <= 0) {
+      continue;
+    }
+    const bundled = merged[appId];
+    if (bundled !== undefined && Array.isArray(bundled.cards) && bundled.cards.length > 0) {
+      continue;
+    }
+    const copied: BadgeDatasetEntry = { size: entry.size };
+    if (entry.name !== undefined) {
+      copied.name = entry.name;
+    }
+    if (Array.isArray(entry.cards) && entry.cards.length > 0) {
+      copied.cards = entry.cards.map((card) => ({ ...card }));
+    }
+    merged[appId] = copied;
+  }
+  const sorted: BadgeDataset = {};
+  for (const appId of Object.keys(merged).sort((a, b) => Number(a) - Number(b))) {
+    sorted[appId] = merged[appId]!;
+  }
+  return sorted;
+}
+
+/**
+ * Serializes badge-card entries into the `badge_cards.json`
  * authoring file shape: long keys (`size`/`name`/`cards` with
  * `hash`/`title`/`iconUrl`) and full icon URLs, pretty-printed for manual
- * merge review. Entries without a usable set size are dropped so the output
+ * review. Accepts either the new-entry diff or the full merged archive.
+ * Entries without a usable set size are dropped so the output
  * always loads back through `normalizeDataset`.
  */
 export function serializeBadgeCardsExport(fresh: BadgeDataset): string {

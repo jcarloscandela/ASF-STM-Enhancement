@@ -1,9 +1,17 @@
 // Dataset-export dialog wiring: button state and the badge_cards.json download.
-// Pure coordination over `src/lib/dataset.ts` plus minimal DOM updates; the
-// userscript keeps only thin host wiring (Blob download, event listeners).
+// The download carries the full merged archive (bundled dataset + new
+// entries); gating, counting, and button state still run on the new-entry
+// diff. Pure coordination over `src/lib/dataset.ts` plus minimal DOM updates;
+// the userscript keeps only thin host wiring (Blob download, event listeners).
 // Tested with canned documents under happy-dom, never a browser.
 
-import { diffNewBadgeCardEntries, serializeBadgeCardsExport, type BadgeCardCache, type BadgeDataset } from "./dataset";
+import {
+  diffNewBadgeCardEntries,
+  mergeBadgeCardsForExport,
+  serializeBadgeCardsExport,
+  type BadgeCardCache,
+  type BadgeDataset,
+} from "./dataset";
 
 export const DATASET_EXPORT_BUTTON_ID = "downloadBadgeCardsButton";
 export const DATASET_EXPORT_COUNT_ID = "datasetExportCount";
@@ -28,9 +36,10 @@ export function updateDatasetExportState(root: ParentNode, newCount: number): vo
   }
 }
 
-/** Recomputes the exportable entries, refreshes the button state, and downloads
- * `badge_cards.json` through `download` when at least one entry exists. An
- * empty diff only refreshes the disabled state and never downloads. */
+/** Recomputes the new-entry diff, refreshes the button state, and downloads
+ * the full merged archive (`badge_cards.json`) through `download` when at
+ * least one new entry exists. An empty diff only refreshes the disabled
+ * state and never downloads. */
 export function triggerDatasetExport(
   root: ParentNode,
   dataset: BadgeDataset,
@@ -43,5 +52,5 @@ export function triggerDatasetExport(
   if (count === 0) {
     return;
   }
-  download(DATASET_EXPORT_FILENAME, serializeBadgeCardsExport(fresh));
+  download(DATASET_EXPORT_FILENAME, serializeBadgeCardsExport(mergeBadgeCardsForExport(dataset, fresh)));
 }

@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import {
   diffNewBadgeCardEntries,
+  mergeBadgeCardsForExport,
   normalizeDataset,
   readBadgeCardCache,
   serializeBadgeCardsExport,
@@ -104,6 +105,45 @@ describe("new badge-card entries diff", () => {
   it("diffs a corrupt cache to zero new entries", () => {
     const storage = fakeStorage({ "TempAsfStm.ASF.STM.BadgeCards.v1": "not json" });
     assert.deepEqual(diffNewBadgeCardEntries(bundled, readBadgeCardCache(storage)), {});
+  });
+});
+
+describe("full-archive export merge", () => {
+  it("merges bundled entries with new ones in ascending numeric key order", () => {
+    const bundled: BadgeDataset = {
+      570: { size: 6 },
+      440: { size: 5, name: "Bundled Game", cards: [{ hash: "440-A", title: "Card A" }] },
+    };
+    const fresh: BadgeDataset = {
+      753: { size: 5, cards: [{ hash: "753-A" }] },
+    };
+    const merged = mergeBadgeCardsForExport(bundled, fresh);
+    assert.deepEqual(Object.keys(merged), ["440", "570", "753"]);
+    assert.equal(merged["440"]?.size, 5);
+    assert.equal(merged["570"]?.size, 6);
+    assert.deepEqual(merged["753"]?.cards, [{ hash: "753-A" }]);
+  });
+
+  it("upgrades a size-only bundled entry with the diff entry", () => {
+    const bundled: BadgeDataset = { 570: { size: 6 } };
+    const fresh: BadgeDataset = { 570: { size: 6, name: "Learned Name", cards: [{ hash: "570-A" }] } };
+    assert.deepEqual(mergeBadgeCardsForExport(bundled, fresh), {
+      570: { size: 6, name: "Learned Name", cards: [{ hash: "570-A" }] },
+    });
+  });
+
+  it("keeps a bundled rich entry over its diff twin", () => {
+    const bundled: BadgeDataset = { 440: { size: 5, cards: [{ hash: "440-Bundled" }] } };
+    const fresh: BadgeDataset = { 440: { size: 5, cards: [{ hash: "440-Cache" }] } };
+    assert.deepEqual(mergeBadgeCardsForExport(bundled, fresh)["440"]?.cards, [{ hash: "440-Bundled" }]);
+  });
+
+  it("does not mutate its inputs", () => {
+    const bundled: BadgeDataset = { 440: { size: 5, cards: [{ hash: "440-A" }] } };
+    const fresh: BadgeDataset = { 753: { size: 5, cards: [{ hash: "753-A" }] } };
+    mergeBadgeCardsForExport(bundled, fresh);
+    assert.deepEqual(Object.keys(bundled), ["440"]);
+    assert.deepEqual(Object.keys(fresh), ["753"]);
   });
 });
 

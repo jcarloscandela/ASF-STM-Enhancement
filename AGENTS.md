@@ -25,7 +25,7 @@ treats every owned copy as tradable. Candidate badge details
 resolve from the single bundled card dataset and a browser card cache first; covered games need
 no badge-detail request at all on the first run — cards render with bundled
 titles and artwork. Badge-detail requests run serially (never parallel) and
-only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.16`, new home
+only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.17`, new home
 `https://github.com/jcarloscandela/ASF-STM-Enhancement`.
 
 ## Layout
@@ -37,7 +37,7 @@ only for games whose card data is not yet known. An interrupted badge-detail pha
   defaults, merge, scan-plan routing), `steam-schema` (Zod-validated Steam
   payloads), `matcher-core` (pure trade matching incl. the tradeoffer handoff
   and its empty-offer diagnosis),
-  `helpers` (pure utilities), `storage` (typed JSON persistence), `bot-cache` (bot-listing cache read/write/invalidate), `scan-resume` (temporary interrupted-scan resume record), `dataset` (bundled dataset + browser badge-card cache, new-entry diff, authoring-shape export serializer), `dataset-export` (Dataset-tab button state + `badge_cards.json` download trigger), `requests`
+  `helpers` (pure utilities), `storage` (typed JSON persistence), `bot-cache` (bot-listing cache read/write/invalidate), `scan-resume` (temporary interrupted-scan resume record), `dataset` (bundled dataset + browser badge-card cache, new-entry diff, full-archive export merge, authoring-shape export serializer), `dataset-export` (Dataset-tab button state + full-archive `badge_cards.json` download trigger), `requests`
   (GM request resolution, GET, retry policy), `resilience` (scan error
   classification, rate-limit circuit breaker), `badge-page` (gamecards-page
   parser, badge ordering/set-size normalization), `match-row` (match-row
@@ -70,9 +70,11 @@ only for games whose card data is not yet known. An interrupted badge-detail pha
   badge slots locally on the first run with bundled titles and artwork; the
   rest fall back to the badge-detail API serially. Learned card lists persist
   in the browser (`TempAsfStm.ASF.STM.BadgeCards.v1`). The config dialog's
-  Dataset tab exports entries the scans learned that the bundle does not cover
-  yet (`badge_cards.json` download, authoring format, button disabled while
-  empty) for manual merge into `data/badge_cards.json` at release time.
+  Dataset tab downloads the full merged archive — every bundled entry plus
+  the entries scans learned that the bundle does not cover yet
+  (`badge_cards.json` download, authoring format, button disabled while
+  empty, gated on at least one new entry) as a drop-in replacement for
+  `data/badge_cards.json` at release time.
   Token discipline: never read `data/badge_cards.json` or dump the badge-cards
   cache whole — sample the first ~20 entries/rows (e.g. head, slice, or a
   paged query) instead, since the file is far too large to fit in context.
