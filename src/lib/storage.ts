@@ -21,6 +21,7 @@ export const STORAGE_KEYS = {
   botCache: "TempAsfStm.ASF.STM.BotCache",
   badgeCards: "TempAsfStm.ASF.STM.BadgeCards",
   scanResume: "TempAsfStm.ASF.STM.ScanResume",
+  privateBots: "TempAsfStm.ASF.STM.PrivateBots.v1",
 } as const;
 
 /** One of the declared persisted keys. */

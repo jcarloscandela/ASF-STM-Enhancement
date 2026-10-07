@@ -182,7 +182,8 @@ export function saveSettings(storage: StorageLike, settings: unknown): void {
 }
 
 /**
- * Clears every persisted value (settings, blacklist, params, bot cache) and
+ * Clears every persisted value (settings, blacklist, params, bot cache,
+ * private bots) and
  * returns a fresh copy of the defaults, so the caller can restore its
  * in-memory state in one step. BREAKING vs earlier behavior: the blacklist no
  * longer survives reset.
@@ -192,5 +193,6 @@ export function resetSettings(storage: StorageLike, defaults: Record<string, unk
   removeKey(storage, STORAGE_KEYS.blacklist);
   removeKey(storage, STORAGE_KEYS.params);
   removeKey(storage, STORAGE_KEYS.botCache);
+  removeKey(storage, STORAGE_KEYS.privateBots);
   return mergeWithDefaults(null, defaults);
 }

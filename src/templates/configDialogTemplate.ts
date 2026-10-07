@@ -24,6 +24,39 @@ export interface ConfigDialogSettings {
   autoDeleteScanFilters: boolean;
 }
 
+export function renderPrivateBotRow(data: {
+  steamId: string;
+  nickname: string | null;
+  avatarHash: string | null;
+  totalItems: number | null;
+}): string {
+  const display = data.nickname && data.nickname !== "" ? data.nickname : data.steamId;
+  const avatar =
+    data.avatarHash && data.avatarHash !== "" ? data.avatarHash : "fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb";
+  const items = typeof data.totalItems === "number" ? ` (${data.totalItems} items)` : "";
+  const profileUrl = `https://steamcommunity.com/profiles/${data.steamId}`;
+  return `
+    <div class="private-bot-row" data-steamid="${data.steamId}" style="display: flex;align-items: center;gap: 8px;margin-bottom: 6px;">
+      <a href="${profileUrl}" target="_blank" rel="noopener noreferrer">
+        <img src="https://avatars.cloudflare.steamstatic.com/${avatar}.jpg" width="32" height="32" alt="" />
+      </a>
+      <a href="${profileUrl}" target="_blank" rel="noopener noreferrer">${display}</a>
+      <span style="color: #8F98A0;">${items}</span>
+      <button class="btn_darkred_white_innerfade btn_small" data-private-clean="${data.steamId}">
+        <span>Limpiar</span>
+      </button>
+    </div>`.replaceAll(/(  |\n)/g, "");
+}
+
+export function renderPrivateBotsTab(
+  entries: Array<{ steamId: string; nickname: string | null; avatarHash: string | null; totalItems: number | null }>,
+): string {
+  if (entries.length === 0) {
+    return `<div class="title_text profile_xp_block_remaining"><p>No hay bots privados registrados.</p></div>`;
+  }
+  return `<div class="title_text profile_xp_block_remaining">${entries.map((e) => renderPrivateBotRow(e)).join("")}</div>`;
+}
+
 export function renderConfigDialog(
   settings: ConfigDialogSettings,
   filterBG: [string, number] | string,
@@ -31,6 +64,7 @@ export function renderConfigDialog(
   sortSelectsHtml: string,
   blacklistText: string,
   scanFiltersTemplate: string,
+  privateBotsHtml: string = "",
 ): string {
   return /* HTML */ `
     <div class="asf-stm-config">
@@ -370,6 +404,20 @@ export function renderConfigDialog(
                 </span>
               </div>
             </fieldset>
+          </div>
+        </li>
+        <li class="asf_stm_tab">
+          <input type="radio" id="asf_stm_tab6" name="asf_stm_tabs" />
+          <label for="asf_stm_tab6">Private bots</label>
+          <div id="asf_stm_tab-content6" class="asf_stm_content">
+            <div class="title_text profile_xp_block_remaining">
+              <h1 style="margin: 0.5em;">Bots no amigos con inventario privado</h1>
+              <p>
+                Abre el perfil para enviar la solicitud manualmente y pulsa Limpiar para quitarlo de este listado y de
+                la blacklist.
+              </p>
+            </div>
+            <div id="asf-stm-private-bots">${privateBotsHtml}</div>
           </div>
         </li>
       </ul>

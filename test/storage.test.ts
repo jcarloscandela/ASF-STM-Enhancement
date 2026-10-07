@@ -29,7 +29,8 @@ describe("STORAGE_KEYS", () => {
   it("keeps the persisted key names unchanged", () => {
     // The five legacy keys are pinned verbatim so they never drift;
     // scanResume is the added temporary resume key (sessionStorage at
-    // the call site) and is pinned here so its spelling stays shared.
+    // the call site) and privateBots the rescue-list key; both are pinned
+    // here so their spelling stays shared.
     assert.deepEqual(STORAGE_KEYS, {
       settings: "TempAsfStm.ASF.STM.Settings",
       blacklist: "TempAsfStm.ASF.STM.Blacklist",
@@ -37,6 +38,7 @@ describe("STORAGE_KEYS", () => {
       botCache: "TempAsfStm.ASF.STM.BotCache",
       badgeCards: "TempAsfStm.ASF.STM.BadgeCards",
       scanResume: "TempAsfStm.ASF.STM.ScanResume",
+      privateBots: "TempAsfStm.ASF.STM.PrivateBots.v1",
     });
   });
 });

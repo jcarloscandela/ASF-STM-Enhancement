@@ -236,12 +236,13 @@ describe("settings store round-trips", () => {
     }
   });
 
-  it("reset removes all four persisted keys and restores defaults", () => {
+  it("reset removes all five persisted keys and restores defaults", () => {
     const storage = fakeStorage({
       [SETTINGS_STORAGE_KEY]: JSON.stringify({ inventoryScan: true }),
       [STORAGE_KEYS.blacklist]: JSON.stringify(["123"]),
       [STORAGE_KEYS.params]: JSON.stringify({ filter: [1] }),
       [STORAGE_KEYS.botCache]: JSON.stringify({ Result: [] }),
+      [STORAGE_KEYS.privateBots]: JSON.stringify({ 123: { steamId: "123" } }),
     });
     const defaults = resetSettings(storage, storeDefaults);
     const dump = storage.dump();

@@ -4,7 +4,7 @@
 // The Tampermonkey metadata block is prepended by the bundler banner config.
 
 import css from "./templates/css.css";
-import { renderConfigDialog } from "./templates/configDialogTemplate";
+import { renderConfigDialog, renderPrivateBotRow, renderPrivateBotsTab } from "./templates/configDialogTemplate";
 import { renderMainContent } from "./templates/mainContentTemplate";
 import { renderMatch } from "./templates/matchTemplate";
 import { renderRow } from "./templates/rowTemplate";
@@ -69,6 +69,16 @@ import badgeCardsJson from "../data/badge_cards.json";
 import { arrayToText, getPartner, hexToRgba, mixAlpha, rgbaToHex, sanitizeNickname, textToArray } from "./lib/helpers";
 import { readJson, STORAGE_KEYS, writeJson } from "./lib/storage";
 import { clearBotCache, loadBotCache, saveBotCache } from "./lib/bot-cache";
+import {
+  backfillFromBotList,
+  listPrivateBots,
+  parseProfileDisplay,
+  readPrivateBots,
+  removePrivateBot,
+  upsertPrivateBot,
+  writePrivateBots,
+  type PrivateBotRecord,
+} from "./lib/private-bots";
 import { compareBots } from "./lib/bot-sort";
 import { gmGet, resolveRequestFunction, retryDelay } from "./lib/requests";
 import type { GmRequestFunction, GmRequestResponse, ModernGmApi } from "./lib/requests";
@@ -121,6 +131,7 @@ declare const unsafeWindow: any;
   const scanBreaker = new RateLimitCircuitBreaker();
   let globalSettings!: UserSettings;
   let blacklist: string[] = [];
+  let privateBots: PrivateBotRecord = {};
   let progressRadials: ProgressRadials = {
     scanPages: { currentStep: 0, steps: 0, radialElement: null, textElement: null },
     badges: { currentStep: 0, steps: 0, radialElement: null, textElement: null },
@@ -245,6 +256,9 @@ declare const unsafeWindow: any;
 
     const sortSelectsHtml = Array.from({ length: 4 }, (_, i) => createSortSelect(i)).join("");
     const blacklistText = arrayToText(blacklist);
+    // Cache-first backfill for legacy IDs (no network on the dialog path yet).
+    if (bots?.Result) backfillFromBotList(privateBots, bots.Result);
+    const privateBotsHtml = renderPrivateBotsTab(listPrivateBots(privateBots));
     const configDialogTemplate = renderConfigDialog(
       globalSettings,
       filterBG,
@@ -252,6 +266,7 @@ declare const unsafeWindow: any;
       sortSelectsHtml,
       blacklistText,
       scanFiltersTemplate,
+      privateBotsHtml,
     );
     let templateElement = document.createElement("template");
     templateElement.innerHTML = configDialogTemplate;
@@ -259,6 +274,8 @@ declare const unsafeWindow: any;
 
     configDialog.querySelector("#addScanFilterButton")!.addEventListener("click", addScanFilterEventHandler, false);
     configDialog.querySelector("#clearScanFilters")!.addEventListener("click", clearScanFiltersEventHandler, false);
+    configDialog.querySelector("#asf-stm-private-bots")!.addEventListener("click", privateBotCleanEventHandler, false);
+    backfillPrivateBotsFromProfiles(configDialog as HTMLElement);
 
     // Dataset export tab: truthful button state on open, Blob download on click.
     updateDatasetExportState(configDialog, newBadgeCardsCount(cardDataset, badgeCardCache));
@@ -335,10 +352,11 @@ declare const unsafeWindow: any;
   }
 
   function ResetConfig() {
-    // Clears the persisted settings (all four keys per the storage spec) and
+    // Clears the persisted settings (all five keys per the storage spec) and
     // restores in-memory defaults. BREAKING vs earlier behavior: the blacklist
     // no longer survives reset — the spec requires reset to clear everything.
     globalSettings = resetSettings(localStorage, defaultSettings) as unknown as UserSettings;
+    privateBots = {};
   }
 
   function SaveConfig() {
@@ -346,6 +364,7 @@ declare const unsafeWindow: any;
     // handler has fully applied the new values.
     saveSettings(localStorage, globalSettings);
     writeJson(localStorage, STORAGE_KEYS.blacklist, blacklist);
+    writePrivateBots(localStorage, privateBots);
   }
 
   function LoadConfig(): void {
@@ -355,6 +374,7 @@ declare const unsafeWindow: any;
     // storage yields a fresh copy of the defaults. Reads never throw.
     globalSettings = loadSettings(localStorage, defaultSettings) as unknown as UserSettings;
     blacklist = readJson<string[]>(localStorage, STORAGE_KEYS.blacklist, []);
+    privateBots = readPrivateBots(localStorage);
   }
 
   function SaveParams() {
@@ -431,6 +451,70 @@ declare const unsafeWindow: any;
         blacklist.push(steamID);
         SaveConfig();
       });
+  }
+
+  function privateBotCleanEventHandler(event: Event): void {
+    const target = (event.target as HTMLElement).closest("[data-private-clean]") as HTMLElement | null;
+    if (!target) return;
+    const steamID = target.dataset["privateClean"] ?? target.getAttribute("data-private-clean") ?? "";
+    if (!steamID) return;
+    removePrivateBot(privateBots, steamID);
+    blacklist = blacklist.filter((id) => id !== steamID);
+    SaveConfig();
+    const container = (event.currentTarget as HTMLElement).querySelector
+      ? ((event.currentTarget as HTMLElement).querySelector("#asf-stm-private-bots") as HTMLElement | null)
+      : null;
+    const list = container ?? (document.querySelector("#asf-stm-private-bots") as HTMLElement | null);
+    if (list) {
+      list.innerHTML = renderPrivateBotsTab(listPrivateBots(privateBots));
+      const textarea = document.querySelector("#blacklist") as HTMLInputElement | null;
+      if (textarea) textarea.value = arrayToText(blacklist);
+    }
+  }
+
+  function backfillPrivateBotsFromProfiles(dialog: HTMLElement): void {
+    const pending = listPrivateBots(privateBots).filter(
+      (e) =>
+        (e.nickname === null || e.avatarHash === null) && bots?.Result?.some((b) => b.SteamID === e.steamId) !== true,
+    );
+    // Entries resolvable from the bot cache were already filled synchronously;
+    // only truly unknown IDs reach the network, one at a time.
+    const queue = pending.filter((e) => {
+      const hit = bots?.Result?.find((b) => b.SteamID === e.steamId);
+      return !hit;
+    });
+    if (queue.length === 0) return;
+    let requestFunc: GmRequestFunction;
+    try {
+      requestFunc = resolveRequestFunction({ legacyRequest: GM_xmlhttpRequest, modernApi: GM });
+    } catch {
+      return;
+    }
+    const step = (i: number): void => {
+      if (i >= queue.length) return;
+      const entry = queue[i]!;
+      gmGet(requestFunc, { url: `https://steamcommunity.com/profiles/${entry.steamId}` })
+        .then((html) => {
+          const parsed = parseProfileDisplay(html);
+          const stored = privateBots[entry.steamId];
+          if (stored) {
+            if (stored.nickname === null && parsed.nickname !== null) stored.nickname = parsed.nickname;
+            if (stored.avatarHash === null && parsed.avatarHash !== null) stored.avatarHash = parsed.avatarHash;
+            writePrivateBots(localStorage, privateBots);
+            const row = dialog.querySelector(`[data-steamid="${entry.steamId}"]`);
+            if (row && (parsed.nickname !== null || parsed.avatarHash !== null)) {
+              row.outerHTML = renderPrivateBotRow(stored);
+            }
+          }
+        })
+        .catch(() => {
+          // Best effort: leave the SteamID fallback row in place.
+        })
+        .finally(() => {
+          setTimeout(() => step(i + 1), globalSettings.weblimiter);
+        });
+    };
+    step(0);
   }
 
   function downloadTextFile(filename: string, text: string): void {
@@ -1060,6 +1144,9 @@ declare const unsafeWindow: any;
             updateProgress("bots");
             // Blacklist private users, saves time
             blacklist.push(bots!.Result[userindex]!.SteamID);
+            if (!globalSettings.matchFriends) {
+              upsertPrivateBot(privateBots, bots!.Result[userindex]!, Date.now());
+            }
             SaveConfig();
             setTimeout(
               (function (index, userindex) {

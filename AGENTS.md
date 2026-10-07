@@ -25,7 +25,7 @@ treats every owned copy as tradable. Candidate badge details
 resolve from the single bundled card dataset and a browser card cache first; covered games need
 no badge-detail request at all on the first run — cards render with bundled
 titles and artwork. Badge-detail requests run serially (never parallel) and
-only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Version `1.0.17`, new home
+only for games whose card data is not yet known. An interrupted badge-detail phase leaves a per-tab `sessionStorage` resume record that the next same-plan scan continues from (cleared on completion or stop). Non-friend partners auto-blacklisted for private inventories are recorded with nickname/avatar metadata and listed in the config dialog's Private bots tab with profile links and a per-row Limpiar button that also un-blacklists (manual-only removal). Version `1.0.18`, new home
 `https://github.com/jcarloscandela/ASF-STM-Enhancement`.
 
 ## Layout
@@ -43,7 +43,8 @@ only for games whose card data is not yet known. An interrupted badge-detail pha
   parser, badge ordering/set-size normalization), `match-row` (match-row
   view-data builders), `offer-writer` (trade-offer selection planner,
   live-pool normalization, exhaustion diagnostics, readiness poll), `bot-sort`
-  (bot-list ordering table). All unit-tested via vitest and bundled via normal imports.
+  (bot-list ordering table), `private-bots` (private-partner rescue list: versioned record read/write/upsert/remove,
+  bot-cache backfill, profile-page display parse). All unit-tested via vitest and bundled via normal imports.
   `src/ASF-STM.ts` keeps only thin host wiring (XHR shells, DOM building,
   cookies, timers); behavior lives in `src/lib/*`.
 - `src/templates/` — HTML/CSS fragments consumed as TypeScript module
