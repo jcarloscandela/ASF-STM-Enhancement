@@ -187,7 +187,6 @@ describe("match row golden snapshot", () => {
       botNickname: "Bot",
       any: "",
       botTotalInventoryCount: 42,
-      botSteamId: "76561198012345678",
       matches: "<div>match</div>",
     });
     assert.match(html, /tradeoffer\/new\/\?partner=/);

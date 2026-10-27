@@ -4,12 +4,12 @@
 // The Tampermonkey metadata block is prepended by the bundler banner config.
 
 import css from "./templates/css.css";
-import { renderConfigDialog, renderPrivateBotRow, renderPrivateBotsTab } from "./templates/configDialogTemplate";
+import { renderConfigDialog } from "./templates/configDialogTemplate";
 import { renderMainContent } from "./templates/mainContentTemplate";
 import { renderMatch } from "./templates/matchTemplate";
 import { renderRow } from "./templates/rowTemplate";
 import { renderScanFilterElement } from "./templates/scanFilterTemplate";
-import { loadSettings, resetSettings, resolveScanPlan, saveSettings } from "./lib/settings";
+import { clearRetiredPartnerKeys, loadSettings, resetSettings, resolveScanPlan, saveSettings } from "./lib/settings";
 import type { ScanPlan } from "./lib/settings";
 import { parseInventoryAsset, parseInventoryDescription } from "./lib/steam-schema";
 import {
@@ -66,19 +66,9 @@ import {
 } from "./lib/dataset";
 import { newBadgeCardsCount, triggerDatasetExport, updateDatasetExportState } from "./lib/dataset-export";
 import badgeCardsJson from "../data/badge_cards.json";
-import { arrayToText, getPartner, hexToRgba, mixAlpha, rgbaToHex, sanitizeNickname, textToArray } from "./lib/helpers";
+import { getPartner, hexToRgba, mixAlpha, rgbaToHex, sanitizeNickname } from "./lib/helpers";
 import { readJson, STORAGE_KEYS, writeJson } from "./lib/storage";
 import { clearBotCache, loadBotCache, saveBotCache } from "./lib/bot-cache";
-import {
-  backfillFromBotList,
-  listPrivateBots,
-  parseProfileDisplay,
-  readPrivateBots,
-  removePrivateBot,
-  upsertPrivateBot,
-  writePrivateBots,
-  type PrivateBotRecord,
-} from "./lib/private-bots";
 import { compareBots } from "./lib/bot-sort";
 import { gmGet, resolveRequestFunction, retryDelay } from "./lib/requests";
 import type { GmRequestFunction, GmRequestResponse, ModernGmApi } from "./lib/requests";
@@ -130,8 +120,6 @@ declare const unsafeWindow: any;
   // apply per session/IP, so one shared breaker gates all three request flows.
   const scanBreaker = new RateLimitCircuitBreaker();
   let globalSettings!: UserSettings;
-  let blacklist: string[] = [];
-  let privateBots: PrivateBotRecord = {};
   let progressRadials: ProgressRadials = {
     scanPages: { currentStep: 0, steps: 0, radialElement: null, textElement: null },
     badges: { currentStep: 0, steps: 0, radialElement: null, textElement: null },
@@ -255,18 +243,12 @@ declare const unsafeWindow: any;
       .join("");
 
     const sortSelectsHtml = Array.from({ length: 4 }, (_, i) => createSortSelect(i)).join("");
-    const blacklistText = arrayToText(blacklist);
-    // Cache-first backfill for legacy IDs (no network on the dialog path yet).
-    if (bots?.Result) backfillFromBotList(privateBots, bots.Result);
-    const privateBotsHtml = renderPrivateBotsTab(listPrivateBots(privateBots));
     const configDialogTemplate = renderConfigDialog(
       globalSettings,
       filterBG,
       questionmarkURL,
       sortSelectsHtml,
-      blacklistText,
       scanFiltersTemplate,
-      privateBotsHtml,
     );
     let templateElement = document.createElement("template");
     templateElement.innerHTML = configDialogTemplate;
@@ -274,9 +256,6 @@ declare const unsafeWindow: any;
 
     configDialog.querySelector("#addScanFilterButton")!.addEventListener("click", addScanFilterEventHandler, false);
     configDialog.querySelector("#clearScanFilters")!.addEventListener("click", clearScanFiltersEventHandler, false);
-    configDialog.querySelector("#asf-stm-private-bots")!.addEventListener("click", privateBotCleanEventHandler, false);
-    backfillPrivateBotsFromProfiles(configDialog as HTMLElement);
-
     // Dataset export tab: truthful button state on open, Blob download on click.
     updateDatasetExportState(configDialog, newBadgeCardsCount(cardDataset, badgeCardCache));
     configDialog
@@ -338,7 +317,6 @@ declare const unsafeWindow: any;
         globalSettings.scanFilters.forEach((x) => {
           x.active = filters[x.appId] ?? false;
         });
-        blacklist = textToArray((dialog.querySelector("#blacklist") as HTMLInputElement).value);
         SaveConfig();
       } else {
         unsafeWindow
@@ -352,19 +330,13 @@ declare const unsafeWindow: any;
   }
 
   function ResetConfig() {
-    // Clears the persisted settings (all five keys per the storage spec) and
-    // restores in-memory defaults. BREAKING vs earlier behavior: the blacklist
-    // no longer survives reset — the spec requires reset to clear everything.
     globalSettings = resetSettings(localStorage, defaultSettings) as unknown as UserSettings;
-    privateBots = {};
   }
 
   function SaveConfig() {
     // Atomic save: one JSON document per key, written only after the dialog
     // handler has fully applied the new values.
     saveSettings(localStorage, globalSettings);
-    writeJson(localStorage, STORAGE_KEYS.blacklist, blacklist);
-    writePrivateBots(localStorage, privateBots);
   }
 
   function LoadConfig(): void {
@@ -373,8 +345,6 @@ declare const unsafeWindow: any;
     // backfill, wrong-typed values fall back per key, and missing/corrupt
     // storage yields a fresh copy of the defaults. Reads never throw.
     globalSettings = loadSettings(localStorage, defaultSettings) as unknown as UserSettings;
-    blacklist = readJson<string[]>(localStorage, STORAGE_KEYS.blacklist, []);
-    privateBots = readPrivateBots(localStorage);
   }
 
   function SaveParams() {
@@ -437,84 +407,6 @@ declare const unsafeWindow: any;
       return "Filters";
     }
     return "Inventory Pages";
-  }
-
-  function blacklistEventHandler(event: Event): void {
-    let steamID = (event.currentTarget as HTMLElement).id.split("_")[1] ?? "";
-    if (blacklist.includes(steamID)) {
-      return;
-    }
-
-    unsafeWindow
-      .ShowConfirmDialog("CONFIRMATION", `Are you sure you want to blacklist bot ${steamID} ?`)
-      .done(function () {
-        blacklist.push(steamID);
-        SaveConfig();
-      });
-  }
-
-  function privateBotCleanEventHandler(event: Event): void {
-    const target = (event.target as HTMLElement).closest("[data-private-clean]") as HTMLElement | null;
-    if (!target) return;
-    const steamID = target.dataset["privateClean"] ?? target.getAttribute("data-private-clean") ?? "";
-    if (!steamID) return;
-    removePrivateBot(privateBots, steamID);
-    blacklist = blacklist.filter((id) => id !== steamID);
-    SaveConfig();
-    const container = (event.currentTarget as HTMLElement).querySelector
-      ? ((event.currentTarget as HTMLElement).querySelector("#asf-stm-private-bots") as HTMLElement | null)
-      : null;
-    const list = container ?? (document.querySelector("#asf-stm-private-bots") as HTMLElement | null);
-    if (list) {
-      list.innerHTML = renderPrivateBotsTab(listPrivateBots(privateBots));
-      const textarea = document.querySelector("#blacklist") as HTMLInputElement | null;
-      if (textarea) textarea.value = arrayToText(blacklist);
-    }
-  }
-
-  function backfillPrivateBotsFromProfiles(dialog: HTMLElement): void {
-    const pending = listPrivateBots(privateBots).filter(
-      (e) =>
-        (e.nickname === null || e.avatarHash === null) && bots?.Result?.some((b) => b.SteamID === e.steamId) !== true,
-    );
-    // Entries resolvable from the bot cache were already filled synchronously;
-    // only truly unknown IDs reach the network, one at a time.
-    const queue = pending.filter((e) => {
-      const hit = bots?.Result?.find((b) => b.SteamID === e.steamId);
-      return !hit;
-    });
-    if (queue.length === 0) return;
-    let requestFunc: GmRequestFunction;
-    try {
-      requestFunc = resolveRequestFunction({ legacyRequest: GM_xmlhttpRequest, modernApi: GM });
-    } catch {
-      return;
-    }
-    const step = (i: number): void => {
-      if (i >= queue.length) return;
-      const entry = queue[i]!;
-      gmGet(requestFunc, { url: `https://steamcommunity.com/profiles/${entry.steamId}` })
-        .then((html) => {
-          const parsed = parseProfileDisplay(html);
-          const stored = privateBots[entry.steamId];
-          if (stored) {
-            if (stored.nickname === null && parsed.nickname !== null) stored.nickname = parsed.nickname;
-            if (stored.avatarHash === null && parsed.avatarHash !== null) stored.avatarHash = parsed.avatarHash;
-            writePrivateBots(localStorage, privateBots);
-            const row = dialog.querySelector(`[data-steamid="${entry.steamId}"]`);
-            if (row && (parsed.nickname !== null || parsed.avatarHash !== null)) {
-              row.outerHTML = renderPrivateBotRow(stored);
-            }
-          }
-        })
-        .catch(() => {
-          // Best effort: leave the SteamID fallback row in place.
-        })
-        .finally(() => {
-          setTimeout(() => step(i + 1), globalSettings.weblimiter);
-        });
-    };
-    step(0);
   }
 
   function downloadTextFile(filename: string, text: string): void {
@@ -653,16 +545,12 @@ declare const unsafeWindow: any;
       botNickname: rowNickname,
       any,
       botTotalInventoryCount: botEntry.TotalInventoryCount,
-      botSteamId: botEntry.SteamID,
       matches,
     });
     let template = document.createElement("template");
     template.innerHTML = rowTemplate.trim();
     let mainContentDiv = document.getElementsByClassName("maincontent")[0] as HTMLElement;
     let newChild = template.content.firstElementChild as HTMLElement;
-    newChild
-      .querySelector(`#blacklist_${bots!.Result[index]!.SteamID}`)!
-      .addEventListener("click", blacklistEventHandler, true);
     newChild.querySelector(".filter_all")!.addEventListener("click", filterAllEventHandler);
     mainContentDiv.appendChild(newChild);
     checkRow(newChild);
@@ -1083,8 +971,7 @@ declare const unsafeWindow: any;
       (bots!.Result[userindex]!.MatchEverything && !globalSettings.anyBots) ||
       (!bots!.Result[userindex]!.MatchEverything && !globalSettings.fairBots) ||
       bots!.Result[userindex]!.TotalInventoryCount < globalSettings.botMinItems ||
-      (globalSettings.botMaxItems > 0 && bots!.Result[userindex]!.TotalInventoryCount > globalSettings.botMaxItems) ||
-      blacklist.includes(bots!.Result[userindex]!.SteamID)
+      (globalSettings.botMaxItems > 0 && bots!.Result[userindex]!.TotalInventoryCount > globalSettings.botMaxItems)
     ) {
       debugPrint("Ignoring bot " + bots!.Result[userindex]!.SteamID);
       debugPrint(bots!.Result[userindex]!.MatchEverything && !globalSettings.anyBots);
@@ -1093,7 +980,6 @@ declare const unsafeWindow: any;
       debugPrint(
         globalSettings.botMaxItems > 0 && bots!.Result[userindex]!.TotalInventoryCount <= globalSettings.botMaxItems,
       );
-      debugPrint(blacklist.includes(bots!.Result[userindex]!.SteamID));
       updateProgress("bots");
       updateProgress("botBadges");
       GetCards(0, userindex + 1);
@@ -1142,12 +1028,7 @@ declare const unsafeWindow: any;
               debugPrint("bot has private profile:" + bots!.Result[userindex]!.SteamID);
             }
             updateProgress("bots");
-            // Blacklist private users, saves time
-            blacklist.push(bots!.Result[userindex]!.SteamID);
-            if (!globalSettings.matchFriends) {
-              upsertPrivateBot(privateBots, bots!.Result[userindex]!, Date.now());
-            }
-            SaveConfig();
+            // Skip the rest of this partner's badge pages for this scan only.
             setTimeout(
               (function (index, userindex) {
                 return function () {
@@ -1696,7 +1577,7 @@ declare const unsafeWindow: any;
     stop = true;
     // Post-trade rescans must not match against pre-trade bot inventories:
     // drop the bot cache (both layers) so the next scan refetches the
-    // listing. Settings, blacklist, badge cards, and params survive Stop.
+    // listing. Settings, badge cards, and params survive Stop.
     bots = null;
     clearBotCache(localStorage);
     Object.values(progressRadials).map((x) => {
@@ -1999,6 +1880,7 @@ declare const unsafeWindow: any;
     });
   }
   //Main
+  clearRetiredPartnerKeys(localStorage);
   LoadConfig();
   if (document.getElementsByClassName("badge_details_set_favorite").length !== 0) {
     let profileRegex = /http[s]?:\/\/steamcommunity.com\/(.*)\/badges.*/g;

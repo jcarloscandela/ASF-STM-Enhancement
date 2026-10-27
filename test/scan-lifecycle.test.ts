@@ -110,3 +110,21 @@ describe("scan lifecycle serial badge-detail phase", () => {
     expect(stopClear).toBeLessThan(stopStart + 500);
   });
 });
+
+describe("private partner handling", () => {
+  const src = readFileSync("src/ASF-STM.ts", "utf8");
+  const missingCardBranch = src.slice(
+    src.indexOf('if (null === xhr.response.documentElement.querySelector(".badge_card_set_cards"))'),
+    src.indexOf(
+      "const parseResult = parseGamecardsPage",
+      src.indexOf('if (null === xhr.response.documentElement.querySelector(".badge_card_set_cards"))'),
+    ),
+  );
+
+  it("skips the partner for the remainder of this scan without persisting an exclusion", () => {
+    expect(missingCardBranch).toContain("})(0, userindex + 1)");
+    expect(missingCardBranch).not.toContain("SaveConfig()");
+    expect(missingCardBranch).not.toContain("localStorage");
+    expect(src).not.toContain("blacklist.includes");
+  });
+});

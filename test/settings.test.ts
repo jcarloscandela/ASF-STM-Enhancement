@@ -11,6 +11,7 @@ import { describe, it } from "vitest";
 import assert from "node:assert/strict";
 
 import {
+  clearRetiredPartnerKeys,
   getActiveScanFilters,
   loadSettings,
   mergeWithDefaults,
@@ -236,17 +237,45 @@ describe("settings store round-trips", () => {
     }
   });
 
-  it("reset removes all five persisted keys and restores defaults", () => {
+  it("upgrade removes retired partner keys and preserves unrelated storage", () => {
     const storage = fakeStorage({
-      [SETTINGS_STORAGE_KEY]: JSON.stringify({ inventoryScan: true }),
-      [STORAGE_KEYS.blacklist]: JSON.stringify(["123"]),
+      "TempAsfStm.ASF.STM.Blacklist": JSON.stringify(["123"]),
+      "TempAsfStm.ASF.STM.PrivateBots.v1": JSON.stringify({ 123: { steamId: "123" } }),
+      [SETTINGS_STORAGE_KEY]: JSON.stringify({ matchFriends: true }),
       [STORAGE_KEYS.params]: JSON.stringify({ filter: [1] }),
       [STORAGE_KEYS.botCache]: JSON.stringify({ Result: [] }),
-      [STORAGE_KEYS.privateBots]: JSON.stringify({ 123: { steamId: "123" } }),
+      [STORAGE_KEYS.badgeCards]: JSON.stringify({ "10": { size: 5 } }),
+      [STORAGE_KEYS.scanResume]: JSON.stringify({ version: 1 }),
+    });
+
+    clearRetiredPartnerKeys(storage);
+    clearRetiredPartnerKeys(storage);
+
+    const dump = storage.dump();
+    assert.equal("TempAsfStm.ASF.STM.Blacklist" in dump, false);
+    assert.equal("TempAsfStm.ASF.STM.PrivateBots.v1" in dump, false);
+    assert.deepEqual(JSON.parse(dump[SETTINGS_STORAGE_KEY]!), { matchFriends: true });
+    assert.deepEqual(JSON.parse(dump[STORAGE_KEYS.params]!), { filter: [1] });
+    assert.deepEqual(JSON.parse(dump[STORAGE_KEYS.botCache]!), { Result: [] });
+    assert.deepEqual(JSON.parse(dump[STORAGE_KEYS.badgeCards]!), { "10": { size: 5 } });
+    assert.deepEqual(JSON.parse(dump[STORAGE_KEYS.scanResume]!), { version: 1 });
+  });
+
+  it("reset removes reset-managed keys and restores defaults", () => {
+    const storage = fakeStorage({
+      [SETTINGS_STORAGE_KEY]: JSON.stringify({ inventoryScan: true }),
+      [STORAGE_KEYS.params]: JSON.stringify({ filter: [1] }),
+      [STORAGE_KEYS.botCache]: JSON.stringify({ Result: [] }),
+      [STORAGE_KEYS.badgeCards]: JSON.stringify({ "10": { size: 5 } }),
+      [STORAGE_KEYS.scanResume]: JSON.stringify({ version: 1 }),
     });
     const defaults = resetSettings(storage, storeDefaults);
     const dump = storage.dump();
-    assert.equal(Object.keys(dump).length, 0, `all keys cleared, got ${JSON.stringify(Object.keys(dump))}`);
+    assert.equal(SETTINGS_STORAGE_KEY in dump, false);
+    assert.equal(STORAGE_KEYS.params in dump, false);
+    assert.equal(STORAGE_KEYS.botCache in dump, false);
+    assert.ok(STORAGE_KEYS.badgeCards in dump);
+    assert.ok(STORAGE_KEYS.scanResume in dump);
     assert.deepEqual(defaults, storeDefaults);
     assert.equal("inventoryScan" in defaults, false);
   });
@@ -254,7 +283,6 @@ describe("settings store round-trips", () => {
   it("reset state persists: a reload after reset still yields defaults and inventory dispatch", () => {
     const storage = fakeStorage({
       [SETTINGS_STORAGE_KEY]: JSON.stringify({ inventoryScan: true }),
-      [STORAGE_KEYS.blacklist]: JSON.stringify(["123"]),
       [STORAGE_KEYS.params]: JSON.stringify({ filter: [1] }),
       [STORAGE_KEYS.botCache]: JSON.stringify({ Result: [] }),
     });

@@ -47,7 +47,7 @@ function settings(): ConfigDialogSettings {
 
 function dialogRoot(): HTMLElement {
   const template = document.createElement("template");
-  template.innerHTML = renderConfigDialog(settings(), ["#171a21", 0.8], "https://example.test/q.png", "", "", "");
+  template.innerHTML = renderConfigDialog(settings(), ["#171a21", 0.8], "https://example.test/q.png", "", "");
   return template.content.firstElementChild as HTMLElement;
 }
 

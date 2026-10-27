@@ -26,19 +26,13 @@ function fakeStorage(seed: Record<string, string> = {}): StorageLike & { dump():
 }
 
 describe("STORAGE_KEYS", () => {
-  it("keeps the persisted key names unchanged", () => {
-    // The five legacy keys are pinned verbatim so they never drift;
-    // scanResume is the added temporary resume key (sessionStorage at
-    // the call site) and privateBots the rescue-list key; both are pinned
-    // here so their spelling stays shared.
+  it("keeps the active persisted key names unchanged", () => {
     assert.deepEqual(STORAGE_KEYS, {
       settings: "TempAsfStm.ASF.STM.Settings",
-      blacklist: "TempAsfStm.ASF.STM.Blacklist",
       params: "TempAsfStm.ASF.STM.Params",
       botCache: "TempAsfStm.ASF.STM.BotCache",
       badgeCards: "TempAsfStm.ASF.STM.BadgeCards",
       scanResume: "TempAsfStm.ASF.STM.ScanResume",
-      privateBots: "TempAsfStm.ASF.STM.PrivateBots.v1",
     });
   });
 });
@@ -81,14 +75,14 @@ describe("readJson fallbacks", () => {
   });
 
   it("treats a stored JSON null as absent", () => {
-    const storage = fakeStorage({ [STORAGE_KEYS.blacklist]: "null" });
-    assert.deepEqual(readJson(storage, STORAGE_KEYS.blacklist, []), []);
+    const storage = fakeStorage({ nullable: "null" });
+    assert.deepEqual(readJson(storage, "nullable", []), []);
   });
 
   it("does not mutate the fallback object across calls", () => {
     const storage = fakeStorage();
     const fallback: string[] = [];
-    const first = readJson(storage, STORAGE_KEYS.blacklist, fallback);
+    const first = readJson(storage, "missing-list", fallback);
     assert.equal(first, fallback, "the fallback instance is returned as-is");
     first.push("123");
     assert.deepEqual(fallback, ["123"]);

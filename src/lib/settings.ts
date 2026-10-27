@@ -181,18 +181,20 @@ export function saveSettings(storage: StorageLike, settings: unknown): void {
   writeJson(storage, SETTINGS_STORAGE_KEY, settings);
 }
 
+/** Removes legacy partner exclusion/list data left by older versions. */
+export function clearRetiredPartnerKeys(storage: StorageLike): void {
+  removeKey(storage, "TempAsfStm.ASF.STM.Blacklist");
+  removeKey(storage, "TempAsfStm.ASF.STM.PrivateBots.v1");
+}
+
 /**
- * Clears every persisted value (settings, blacklist, params, bot cache,
- * private bots) and
+ * Clears reset-managed persisted values (settings, params, bot cache) and
  * returns a fresh copy of the defaults, so the caller can restore its
- * in-memory state in one step. BREAKING vs earlier behavior: the blacklist no
- * longer survives reset.
+ * in-memory state in one step.
  */
 export function resetSettings(storage: StorageLike, defaults: Record<string, unknown>): Record<string, unknown> {
   removeKey(storage, SETTINGS_STORAGE_KEY);
-  removeKey(storage, STORAGE_KEYS.blacklist);
   removeKey(storage, STORAGE_KEYS.params);
   removeKey(storage, STORAGE_KEYS.botCache);
-  removeKey(storage, STORAGE_KEYS.privateBots);
   return mergeWithDefaults(null, defaults);
 }

@@ -11,7 +11,6 @@ export interface RowTemplateData {
   botNickname: string;
   any: string;
   botTotalInventoryCount: number;
-  botSteamId: string | number;
   matches: string;
 }
 
@@ -44,13 +43,7 @@ export function renderRow(data: RowTemplateData): string {
           <div class="badge_title">
             &nbsp;<a target="_blank" rel="noopener noreferrer" href="https://steamcommunity.com/${data.botProfileLink}"
               >${data.botNickname}</a
-            >${data.any} &ensp;<span style="color: #8F98A0;">(${data.botTotalInventoryCount} items)</span> &ensp;<a
-              id="blacklist_${data.botSteamId}"
-              data-tooltip-text="Blacklist this bot"
-              class="tooltip hover_tooltip"
-            >
-              <img src="https://community.cloudflare.steamstatic.com/public/images/skin_1/iconForumBan.png?v=1" />
-            </a>
+            >${data.any} &ensp;<span style="color: #8F98A0;">(${data.botTotalInventoryCount} items)</span>
           </div>
         </div>
         <div class="badge_title_rule"></div>

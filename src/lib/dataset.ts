@@ -89,9 +89,19 @@ export const BUILT_USERSCRIPT_BUDGET_BYTES = 6_000_000;
 export function encodeCompactEntry(appId: string, entry: BadgeDatasetEntry): CompactPublishEntry {
   const prefix = `${appId}-`;
   const cards = entry.cards?.map((card): CompactPublishCard => {
-    const h = card.hash.startsWith(prefix) ? card.hash.slice(prefix.length) : `=${card.hash}`;
-    const suffix = h.startsWith("=") ? h.slice(1) : h;
-    const t = card.title === undefined ? `\0` : card.title === suffix ? "" : card.title;
+    const suffix = card.hash.startsWith(prefix) ? card.hash.slice(prefix.length) : undefined;
+    // A suffix beginning with "=" collides with the literal-hash marker used
+    // by the decoder. Store the full hash in literal form to preserve it.
+    let h: string;
+    let titleFallback: string;
+    if (suffix === undefined || suffix.startsWith("=")) {
+      h = `=${card.hash}`;
+      titleFallback = card.hash;
+    } else {
+      h = suffix;
+      titleFallback = suffix;
+    }
+    const t = card.title === undefined ? `\0` : card.title === titleFallback ? "" : card.title;
     let u = "";
     if (card.iconUrl !== undefined) {
       u = card.iconUrl.startsWith(BUNDLED_ICON_URL_PREFIX)

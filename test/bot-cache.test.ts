@@ -59,16 +59,14 @@ describe("clearBotCache (Stop)", () => {
     assert.equal(loadBotCache(storage, 1000, TTL, false), null);
   });
 
-  it("leaves settings, blacklist, badge cards, and params untouched", () => {
+  it("leaves settings, badge cards, and params untouched", () => {
     const storage = fakeStorage();
     saveBotCache(storage, botsResponse(), 1000);
     writeJson(storage, STORAGE_KEYS.settings, { matchFriends: false });
-    writeJson(storage, STORAGE_KEYS.blacklist, ["123"]);
     writeJson(storage, STORAGE_KEYS.badgeCards, { "10": { size: 5 } });
     writeJson(storage, STORAGE_KEYS.params, { filter: [10] });
     clearBotCache(storage);
     assert.deepEqual(readJson(storage, STORAGE_KEYS.settings, null), { matchFriends: false });
-    assert.deepEqual(readJson(storage, STORAGE_KEYS.blacklist, null), ["123"]);
     assert.deepEqual(readJson(storage, STORAGE_KEYS.badgeCards, null), { "10": { size: 5 } });
     assert.deepEqual(readJson(storage, STORAGE_KEYS.params, null), { filter: [10] });
   });

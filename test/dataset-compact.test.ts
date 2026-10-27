@@ -104,6 +104,17 @@ describe("compact codec edge cases", () => {
     ]);
   });
 
+  it("round-trips prefixed hashes whose suffix starts with the literal marker", () => {
+    const raw = {
+      "501930": {
+        size: 8,
+        cards: [{ hash: "501930-===> Detonator", title: "===> Detonator" }],
+      },
+    };
+    const decoded = normalizeDataset(compactDatasetForPublish(normalizeDataset(raw)));
+    expect(decoded["501930"]?.cards).toEqual([{ hash: "501930-===> Detonator", title: "===> Detonator" }]);
+  });
+
   it("round-trips stripped icon tails and icon-less cards", () => {
     const tail = "tail-bytes";
     const raw = {

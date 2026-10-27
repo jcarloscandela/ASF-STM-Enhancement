@@ -49,7 +49,6 @@ const CONFIG_ARGS = {
   filterBG: ["#171a21", 0.8] as [string, number],
   questionmarkURL: "https://example.test/q.png",
   sortSelectsHtml: "<select></select>",
-  blacklistText: "123",
   scanFiltersTemplate: "<span></span>",
 };
 
@@ -122,7 +121,6 @@ describe("renderRow", () => {
       botNickname: "SomeBot",
       any: "&nbsp;ANY&nbsp;",
       botTotalInventoryCount: 42,
-      botSteamId: "76561198000000001",
       matches: "<div>matches</div>",
       ...overrides,
     };
@@ -135,7 +133,7 @@ describe("renderRow", () => {
     assert.match(html, /href="https:\/\/trade\.example\/\?match=all"/);
     assert.match(html, /avatars\.cloudflare\.steamstatic\.com\/abc123\.jpg/);
     assert.match(html, /\(42 items\)/);
-    assert.match(html, /id="blacklist_76561198000000001"/);
+    assert.doesNotMatch(html, /blacklist|iconForumBan/i);
     assert.match(html, /<div>matches<\/div>/);
   });
 
@@ -187,7 +185,6 @@ describe("renderConfigDialog", () => {
       CONFIG_ARGS.filterBG,
       CONFIG_ARGS.questionmarkURL,
       CONFIG_ARGS.sortSelectsHtml,
-      CONFIG_ARGS.blacklistText,
       CONFIG_ARGS.scanFiltersTemplate,
     );
     for (const id of ["asf_stm_tab1", "asf_stm_tab2", "asf_stm_tab3", "asf_stm_tab4"]) {
@@ -207,7 +204,6 @@ describe("renderConfigDialog", () => {
       CONFIG_ARGS.filterBG,
       CONFIG_ARGS.questionmarkURL,
       CONFIG_ARGS.sortSelectsHtml,
-      CONFIG_ARGS.blacklistText,
       CONFIG_ARGS.scanFiltersTemplate,
     );
     assert.doesNotMatch(html, /id="matchFriends"[^>]*checked/);
@@ -215,16 +211,18 @@ describe("renderConfigDialog", () => {
     assert.match(html, /<option value="NOTHING" selected>Do Nothing<\/option>/);
   });
 
-  it("pastes blacklist text verbatim", () => {
+  it("omits blacklist and private-bot UI and keeps the remaining tabs contiguous", () => {
     const html = renderConfigDialog(
       settings(),
       CONFIG_ARGS.filterBG,
       CONFIG_ARGS.questionmarkURL,
       CONFIG_ARGS.sortSelectsHtml,
-      "111\n222",
       CONFIG_ARGS.scanFiltersTemplate,
     );
-    assert.match(html, /111\n222/);
+    assert.doesNotMatch(html, /Blacklist|blacklist|Private bots|private-bots/i);
+    assert.match(html, /id="asf_stm_tab3"[\s\S]*?Scan filters/);
+    assert.match(html, /id="asf_stm_tab4"[\s\S]*?Dataset/);
+    assert.doesNotMatch(html, /asf_stm_tab[56]/);
   });
 
   it("renders the Dataset tab with a disabled download button by default", () => {
@@ -233,10 +231,9 @@ describe("renderConfigDialog", () => {
       CONFIG_ARGS.filterBG,
       CONFIG_ARGS.questionmarkURL,
       CONFIG_ARGS.sortSelectsHtml,
-      CONFIG_ARGS.blacklistText,
       CONFIG_ARGS.scanFiltersTemplate,
     );
-    assert.match(html, /id="asf_stm_tab5"/);
+    assert.match(html, /id="asf_stm_tab4"/);
     assert.match(html, /id="downloadBadgeCardsButton"[^>]*disabled/);
     assert.match(html, /Download new badge cards/);
     assert.match(html, /id="datasetExportCount"/);
